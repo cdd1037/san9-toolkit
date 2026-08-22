@@ -24,7 +24,6 @@ constexpr int kLogicalHeight = 768;
 constexpr DXGI_FORMAT kFrameTextureFormat = DXGI_FORMAT_B5G5R5A1_UNORM;
 constexpr char kShaderSource[] = R"(
 Texture2D frameTexture : register(t0);
-SamplerState frameSampler : register(s0);
 
 struct VertexOutput {
     float4 position : SV_Position;
@@ -41,9 +40,36 @@ VertexOutput VertexMain(uint vertexId : SV_VertexID) {
 }
 
 float4 PixelMain(VertexOutput input) : SV_Target {
-    const float4 color = frameTexture.Sample(
-        frameSampler, float2(input.uv.x, 1.0 - input.uv.y));
-    return float4(color.rgb, 1.0);
+    const float2 textureSize = float2(1024.0, 768.0);
+    const float2 sourcePosition =
+        float2(input.uv.x, 1.0 - input.uv.y) * textureSize - 0.5;
+    const int2 basePosition = int2(floor(sourcePosition));
+    const float2 fraction = frac(sourcePosition);
+    const float2 fraction2 = fraction * fraction;
+    const float2 fraction3 = fraction2 * fraction;
+    const float4 weightsX = float4(
+        -0.5 * fraction3.x + fraction2.x - 0.5 * fraction.x,
+         1.5 * fraction3.x - 2.5 * fraction2.x + 1.0,
+        -1.5 * fraction3.x + 2.0 * fraction2.x + 0.5 * fraction.x,
+         0.5 * fraction3.x - 0.5 * fraction2.x);
+    const float4 weightsY = float4(
+        -0.5 * fraction3.y + fraction2.y - 0.5 * fraction.y,
+         1.5 * fraction3.y - 2.5 * fraction2.y + 1.0,
+        -1.5 * fraction3.y + 2.0 * fraction2.y + 0.5 * fraction.y,
+         0.5 * fraction3.y - 0.5 * fraction2.y);
+
+    float3 color = 0.0;
+    [unroll]
+    for (int y = 0; y < 4; ++y) {
+        [unroll]
+        for (int x = 0; x < 4; ++x) {
+            const int2 samplePosition = clamp(
+                basePosition + int2(x - 1, y - 1), int2(0, 0), int2(1023, 767));
+            color += frameTexture.Load(int3(samplePosition, 0)).rgb *
+                     weightsX[x] * weightsY[y];
+        }
+    }
+    return float4(saturate(color), 1.0);
 }
 )";
 
@@ -58,7 +84,6 @@ ComPtr<IDXGISwapChain> g_swapChain;
 ComPtr<ID3D11RenderTargetView> g_renderTarget;
 ComPtr<ID3D11Texture2D> g_frameTexture;
 ComPtr<ID3D11ShaderResourceView> g_frameView;
-ComPtr<ID3D11SamplerState> g_sampler;
 ComPtr<ID3D11VertexShader> g_vertexShader;
 ComPtr<ID3D11PixelShader> g_pixelShader;
 
@@ -230,14 +255,7 @@ bool Initialize(HWND window) {
         return false;
     }
 
-    D3D11_SAMPLER_DESC samplerDescription{};
-    samplerDescription.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
-    samplerDescription.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-    samplerDescription.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-    samplerDescription.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    samplerDescription.MaxLOD = D3D11_FLOAT32_MAX;
-    if (FAILED(g_device->CreateSamplerState(&samplerDescription, &g_sampler)) ||
-        !CreateRenderTarget(width, height)) {
+    if (!CreateRenderTarget(width, height)) {
         Shutdown();
         return false;
     }
@@ -268,7 +286,6 @@ bool PresentNow(HDC framebufferDc) {
     g_context->VSSetShader(g_vertexShader.Get(), nullptr, 0);
     g_context->PSSetShader(g_pixelShader.Get(), nullptr, 0);
     g_context->PSSetShaderResources(0, 1, g_frameView.GetAddressOf());
-    g_context->PSSetSamplers(0, 1, g_sampler.GetAddressOf());
     g_context->Draw(3, 0);
     ID3D11ShaderResourceView* noResource = nullptr;
     g_context->PSSetShaderResources(0, 1, &noResource);
@@ -309,7 +326,6 @@ void Shutdown() {
     }
     g_pixelShader.Reset();
     g_vertexShader.Reset();
-    g_sampler.Reset();
     g_frameView.Reset();
     g_frameTexture.Reset();
     g_renderTarget.Reset();
