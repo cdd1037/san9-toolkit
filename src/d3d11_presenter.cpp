@@ -21,8 +21,6 @@ using Microsoft::WRL::ComPtr;
 
 constexpr int kLogicalWidth = 1024;
 constexpr int kLogicalHeight = 768;
-constexpr UINT kPresentMessage = WM_APP + 0x4D1;
-
 constexpr char kShaderSource[] = R"(
 Texture2D frameTexture : register(t0);
 SamplerState frameSampler : register(s0);
@@ -277,29 +275,24 @@ bool PresentNow(HDC framebufferDc) {
     return SUCCEEDED(presented);
 }
 
-bool RequestPresent(HDC framebufferDc) {
+bool QueueFrame(HDC framebufferDc) {
     if (!framebufferDc || !g_device || !g_window) {
         return false;
     }
     g_pendingFramebufferDc = framebufferDc;
-    if (InterlockedExchange(&g_presentPending, 1) == 0 &&
-        !PostMessageW(g_window, kPresentMessage, 0, 0)) {
-        InterlockedExchange(&g_presentPending, 0);
-        return false;
-    }
+    InterlockedExchange(&g_presentPending, 1);
     return true;
 }
 
-bool HandleWindowMessage(MSG& message) {
-    if (message.hwnd != g_window || message.message != kPresentMessage) {
-        return false;
+bool PresentFrame(HDC framebufferDc) {
+    return PresentNow(framebufferDc);
+}
+
+bool PresentPendingFrame() {
+    if (InterlockedExchange(&g_presentPending, 0) == 0) {
+        return true;
     }
-    InterlockedExchange(&g_presentPending, 0);
-    if (!PresentNow(g_pendingFramebufferDc)) {
-        OutputDebugStringW(L"San9Toolkit: D3D11 frame presentation failed.\n");
-    }
-    message.message = WM_NULL;
-    return true;
+    return PresentNow(g_pendingFramebufferDc);
 }
 
 void Shutdown() {

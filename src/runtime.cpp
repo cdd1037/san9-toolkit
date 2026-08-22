@@ -24,12 +24,14 @@ constexpr std::size_t kNormalizeWindowMessagePrologueSize = 8;
 
 using BitBltFunction = BOOL(WINAPI*)(HDC, int, int, int, int, HDC, int, int, DWORD);
 using GetCursorPosFunction = BOOL(WINAPI*)(LPPOINT);
+using ReleaseDcFunction = int(WINAPI*)(HWND, HDC);
 using NormalizeWindowMessageFunction = int(__cdecl*)(MSG*, MSG*);
 
 HWND g_window = nullptr;
 WNDPROC g_originalWindowProc = nullptr;
 BitBltFunction g_originalBitBlt = nullptr;
 GetCursorPosFunction g_originalGetCursorPos = nullptr;
+ReleaseDcFunction g_originalReleaseDc = nullptr;
 NormalizeWindowMessageFunction g_originalNormalizeWindowMessage = nullptr;
 HDC g_framebufferDc = nullptr;
 volatile LONG g_presentSerial = 0;
@@ -64,7 +66,7 @@ bool IsTargetWindow(HWND window) {
 
 bool RenderWindow() {
     return IsLogicalFramebuffer(g_framebufferDc) &&
-           san9::d3d11_presenter::RequestPresent(g_framebufferDc);
+           san9::d3d11_presenter::PresentFrame(g_framebufferDc);
 }
 
 bool MapPhysicalPoint(HWND window, POINT physical, POINT& logical) {
@@ -149,9 +151,6 @@ int __cdecl ScaledNormalizeWindowMessage(MSG* normalizedMessage, MSG* sourceMess
     const HWND window = g_window;
     if (sourceMessage && window && sourceMessage->hwnd == window &&
         InterlockedCompareExchange(&g_windowBehaviorInstalled, 0, 0) != 0) {
-        if (san9::d3d11_presenter::HandleWindowMessage(*sourceMessage)) {
-            return g_originalNormalizeWindowMessage(normalizedMessage, sourceMessage);
-        }
         if (san9::cursor_lock::HandleInputMessage(window, *sourceMessage)) {
             return g_originalNormalizeWindowMessage(normalizedMessage, sourceMessage);
         }
@@ -262,9 +261,19 @@ BOOL WINAPI ScaledBitBlt(HDC destination, int xDest, int yDest, int width, int h
         return g_originalBitBlt(destination, xDest, yDest, width, height,
                                 source, xSource, ySource, rop);
     }
-    const BOOL result = san9::d3d11_presenter::RequestPresent(source) ? TRUE : FALSE;
+    const BOOL result = san9::d3d11_presenter::QueueFrame(source) ? TRUE : FALSE;
     if (result) {
         InterlockedIncrement(&g_presentSerial);
+    }
+    return result;
+}
+
+int WINAPI ScaledReleaseDc(HWND window, HDC deviceContext) {
+    const int result = g_originalReleaseDc(window, deviceContext);
+    if (window == g_window &&
+        InterlockedCompareExchange(&g_windowBehaviorInstalled, 0, 0) != 0 &&
+        !san9::d3d11_presenter::PresentPendingFrame()) {
+        OutputDebugStringW(L"San9Toolkit: D3D11 frame presentation failed after ReleaseDC.\n");
     }
     return result;
 }
@@ -387,6 +396,7 @@ bool PatchNormalizeWindowMessage() {
 bool PatchRequiredHooks() {
     return PatchImport("gdi32.dll", "BitBlt", &ScaledBitBlt, g_originalBitBlt) &&
            PatchImport("user32.dll", "GetCursorPos", &ScaledGetCursorPos, g_originalGetCursorPos) &&
+           PatchImport("user32.dll", "ReleaseDC", &ScaledReleaseDc, g_originalReleaseDc) &&
            PatchNormalizeWindowMessage();
 }
 
