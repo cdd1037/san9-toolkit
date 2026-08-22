@@ -75,13 +75,19 @@ bool CompileShader(const char* entryPoint, const char* profile, ComPtr<ID3DBlob>
 }
 
 bool CreateRenderTarget(UINT width, UINT height) {
-    g_renderTarget.Reset();
     if (g_backBufferWidth != 0 || g_backBufferHeight != 0) {
+        // ResizeBuffers requires every direct and indirect back-buffer reference
+        // to be released, including bindings retained by the immediate context.
+        g_context->ClearState();
+        g_renderTarget.Reset();
+        g_context->Flush();
         const HRESULT resized = g_swapChain->ResizeBuffers(0, width, height,
                                                            DXGI_FORMAT_UNKNOWN, 0);
         if (FAILED(resized)) {
             return false;
         }
+    } else {
+        g_renderTarget.Reset();
     }
 
     ComPtr<ID3D11Texture2D> backBuffer;
