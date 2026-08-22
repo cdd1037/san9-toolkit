@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 namespace san9::d3d11_presenter {
@@ -118,13 +119,11 @@ bool EnsureRenderTarget() {
 
 bool UploadFrame(HDC framebufferDc) {
     const HGDIOBJ bitmapHandle = GetCurrentObject(framebufferDc, OBJ_BITMAP);
-    DIBSECTION section{};
+    BITMAP bitmap{};
     if (!bitmapHandle ||
-        GetObjectW(bitmapHandle, sizeof(section), &section) != sizeof(section) ||
-        section.dsBm.bmWidth != kLogicalWidth ||
-        section.dsBm.bmHeight != kLogicalHeight ||
-        section.dsBm.bmBitsPixel != 16 || !section.dsBm.bmBits ||
-        section.dsBmih.biCompression != BI_RGB) {
+        GetObjectW(bitmapHandle, sizeof(bitmap), &bitmap) != sizeof(bitmap) ||
+        bitmap.bmWidth != kLogicalWidth || std::abs(bitmap.bmHeight) != kLogicalHeight ||
+        bitmap.bmBitsPixel != 16 || !bitmap.bmBits) {
         return false;
     }
 
@@ -132,11 +131,11 @@ bool UploadFrame(HDC framebufferDc) {
     if (FAILED(g_context->Map(g_frameTexture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
         return false;
     }
-    const auto* sourceBase = static_cast<const std::uint8_t*>(section.dsBm.bmBits);
+    const auto* sourceBase = static_cast<const std::uint8_t*>(bitmap.bmBits);
     for (int y = 0; y < kLogicalHeight; ++y) {
         const int sourceY = kLogicalHeight - 1 - y;
         const auto* source = reinterpret_cast<const std::uint16_t*>(
-            sourceBase + sourceY * section.dsBm.bmWidthBytes);
+            sourceBase + sourceY * bitmap.bmWidthBytes);
         auto* destination = reinterpret_cast<std::uint32_t*>(
             static_cast<std::uint8_t*>(mapped.pData) + y * mapped.RowPitch);
         for (int x = 0; x < kLogicalWidth; ++x) {
