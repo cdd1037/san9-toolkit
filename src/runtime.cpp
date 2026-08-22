@@ -1,6 +1,9 @@
 #include <windows.h>
 #include <windowsx.h>
 
+#include "cursor_lock.h"
+#include "viewport.h"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -31,93 +34,8 @@ HDC g_framebufferDc = nullptr;
 volatile LONG g_clearClient = 1;
 volatile LONG g_presentSerial = 0;
 volatile LONG g_windowBehaviorInstalled = 0;
-volatile LONG g_cursorLockEnabled = 0;
-volatile LONG g_cursorClipApplied = 0;
-volatile LONG g_windowActive = 0;
-volatile LONG g_applicationActive = 0;
-volatile LONG g_windowMovingOrSizing = 0;
 
-struct Viewport {
-    int x{};
-    int y{};
-    int width{};
-    int height{};
-};
-
-Viewport CalculateViewport(HWND window) {
-    RECT client{};
-    if (!GetClientRect(window, &client)) {
-        return {};
-    }
-    const int clientWidth = std::max(0L, client.right - client.left);
-    const int clientHeight = std::max(0L, client.bottom - client.top);
-    if (clientWidth == 0 || clientHeight == 0) {
-        return {};
-    }
-
-    Viewport viewport{};
-    if (static_cast<std::int64_t>(clientWidth) * kLogicalHeight <=
-        static_cast<std::int64_t>(clientHeight) * kLogicalWidth) {
-        viewport.width = clientWidth;
-        viewport.height = MulDiv(clientWidth, kLogicalHeight, kLogicalWidth);
-    } else {
-        viewport.height = clientHeight;
-        viewport.width = MulDiv(clientHeight, kLogicalWidth, kLogicalHeight);
-    }
-    viewport.x = (clientWidth - viewport.width) / 2;
-    viewport.y = (clientHeight - viewport.height) / 2;
-    return viewport;
-}
-
-bool IsFlagSet(volatile LONG& flag) {
-    return InterlockedCompareExchange(&flag, 0, 0) != 0;
-}
-
-void ReleaseCursorClip() {
-    if (InterlockedExchange(&g_cursorClipApplied, 0) != 0) {
-        ClipCursor(nullptr);
-    }
-}
-
-void UpdateCursorClip(HWND window) {
-    const bool shouldApply = window == g_window &&
-                             IsFlagSet(g_cursorLockEnabled) &&
-                             IsFlagSet(g_windowBehaviorInstalled) &&
-                             IsFlagSet(g_windowActive) &&
-                             IsFlagSet(g_applicationActive) &&
-                             !IsFlagSet(g_windowMovingOrSizing) &&
-                             !IsIconic(window);
-    if (!shouldApply) {
-        ReleaseCursorClip();
-        return;
-    }
-
-    const Viewport viewport = CalculateViewport(window);
-    if (viewport.width <= 0 || viewport.height <= 0) {
-        ReleaseCursorClip();
-        return;
-    }
-
-    POINT corners[2]{{viewport.x, viewport.y},
-                     {viewport.x + viewport.width, viewport.y + viewport.height}};
-    SetLastError(ERROR_SUCCESS);
-    if (MapWindowPoints(window, nullptr, corners, 2) == 0 && GetLastError() != ERROR_SUCCESS) {
-        ReleaseCursorClip();
-        return;
-    }
-    const RECT clip{corners[0].x, corners[0].y, corners[1].x, corners[1].y};
-    if (ClipCursor(&clip)) {
-        InterlockedExchange(&g_cursorClipApplied, 1);
-    } else {
-        ReleaseCursorClip();
-    }
-}
-
-void ToggleCursorLock(HWND window) {
-    const LONG enabled = InterlockedCompareExchange(&g_cursorLockEnabled, 0, 0);
-    InterlockedExchange(&g_cursorLockEnabled, enabled == 0 ? 1 : 0);
-    UpdateCursorClip(window);
-}
+using Viewport = san9::viewport::Bounds;
 
 bool IsLogicalFramebuffer(HDC source) {
     if (!source || GetObjectType(source) != OBJ_MEMDC) {
@@ -168,7 +86,7 @@ bool RenderFullFrame(HWND window, HDC destination) {
     if (!destination || !IsLogicalFramebuffer(source)) {
         return false;
     }
-    const Viewport viewport = CalculateViewport(window);
+    const Viewport viewport = san9::viewport::Calculate(window);
     if (viewport.width <= 0 || viewport.height <= 0) {
         return false;
     }
@@ -198,7 +116,7 @@ bool RenderWindow(HWND window) {
 }
 
 bool MapPhysicalPoint(HWND window, POINT physical, POINT& logical) {
-    const Viewport viewport = CalculateViewport(window);
+    const Viewport viewport = san9::viewport::Calculate(window);
     if (viewport.width <= 0 || viewport.height <= 0) {
         return false;
     }
@@ -332,28 +250,8 @@ void EnforceFourByThree(HWND window, WPARAM edge, RECT& outer) {
 }
 
 LRESULT CALLBACK ScalerWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
-    if (message == WM_KEYDOWN && wParam == VK_F8) {
-        if ((lParam & (static_cast<LPARAM>(1) << 30)) == 0) {
-            ToggleCursorLock(window);
-        }
+    if (san9::cursor_lock::HandleWindowMessageBefore(window, message, wParam, lParam)) {
         return 0;
-    }
-    if (message == WM_ACTIVATE) {
-        InterlockedExchange(&g_windowActive, LOWORD(wParam) == WA_INACTIVE ? 0 : 1);
-        if (!IsFlagSet(g_windowActive)) {
-            ReleaseCursorClip();
-        }
-    } else if (message == WM_ACTIVATEAPP) {
-        InterlockedExchange(&g_applicationActive, wParam == FALSE ? 0 : 1);
-        if (!IsFlagSet(g_applicationActive)) {
-            ReleaseCursorClip();
-        }
-    } else if (message == WM_ENTERSIZEMOVE) {
-        InterlockedExchange(&g_windowMovingOrSizing, 1);
-        ReleaseCursorClip();
-    } else if (message == WM_DESTROY || message == WM_NCDESTROY) {
-        InterlockedExchange(&g_cursorLockEnabled, 0);
-        ReleaseCursorClip();
     }
     if (message == WM_SIZING) {
         EnforceFourByThree(window, wParam, *reinterpret_cast<RECT*>(lParam));
@@ -380,22 +278,7 @@ LRESULT CALLBACK ScalerWindowProc(HWND window, UINT message, WPARAM wParam, LPAR
     } else if (message == WM_SIZE) {
         InvalidateRect(window, nullptr, FALSE);
     }
-    if (message == WM_EXITSIZEMOVE) {
-        InterlockedExchange(&g_windowMovingOrSizing, 0);
-    }
-    switch (message) {
-    case WM_ACTIVATE:
-    case WM_ACTIVATEAPP:
-    case WM_MOVE:
-    case WM_SIZE:
-    case WM_WINDOWPOSCHANGED:
-    case WM_DPICHANGED:
-    case WM_EXITSIZEMOVE:
-        UpdateCursorClip(window);
-        break;
-    default:
-        break;
-    }
+    san9::cursor_lock::HandleWindowMessageAfter(window, message);
     return result;
 }
 
@@ -423,7 +306,7 @@ BOOL WINAPI ScaledBitBlt(HDC destination, int xDest, int yDest, int width, int h
         return g_originalBitBlt(destination, xDest, yDest, width, height,
                                 source, xSource, ySource, rop);
     }
-    const Viewport viewport = CalculateViewport(g_window);
+    const Viewport viewport = san9::viewport::Calculate(g_window);
     if (viewport.width <= 0 || viewport.height <= 0) {
         return FALSE;
     }
@@ -597,9 +480,7 @@ bool InstallWindowBehavior(HWND window) {
     if (!SetWindowTextW(window, kWindowTitle)) {
         return false;
     }
-    const bool active = GetForegroundWindow() == window;
-    InterlockedExchange(&g_windowActive, active ? 1 : 0);
-    InterlockedExchange(&g_applicationActive, active ? 1 : 0);
+    san9::cursor_lock::Initialize(window);
     return true;
 }
 
@@ -640,7 +521,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void* reserved) {
             CloseHandle(thread);
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
-        ReleaseCursorClip();
+        san9::cursor_lock::Shutdown();
     }
     return TRUE;
 }
