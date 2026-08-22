@@ -28,8 +28,9 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。
 - DLL 钩住主模块导入表中的 `BitBlt`，只接受选中 1024×768×16 位 `BI_RGB` DIB 的
   内存 DC。确认原作提交后，从 DIB 的 X1R5G5B5 像素生成 BGRA8 动态纹理，由 D3D11
   全屏三角形和点采样 shader 映射到等比缩放视口；可见窗口不再使用 `StretchBlt`。
-  `BitBlt` hook 只记录最新后缓冲并向游戏线程的内部消息窗口请求提交，DXGI `Present`
-  在原作释放目标 HDC 后执行，避免 GDI 与 swap chain 同时占用主窗口。
+  `BitBlt` hook 只记录最新后缓冲并向已确认的游戏主窗口投递私有消息；该消息在现有
+  `normalize_window_message` hook 中消费，DXGI `Present` 因而固定在主消息线程且发生于
+  原作释放目标 HDC 之后，避免 GDI 与 swap chain 同时占用主窗口。
 - 命中后缓存原作后缓冲 DC；换框、缩放和 `WM_PAINT` 会主动重绘整帧，不依赖原作恰好
   再次提交画面。
 - DLL 校验并挂钩主游戏消息泵的统一规范化入口 `0x5CC0B0`。硬件鼠标消息在进入 MFC

@@ -149,6 +149,9 @@ int __cdecl ScaledNormalizeWindowMessage(MSG* normalizedMessage, MSG* sourceMess
     const HWND window = g_window;
     if (sourceMessage && window && sourceMessage->hwnd == window &&
         InterlockedCompareExchange(&g_windowBehaviorInstalled, 0, 0) != 0) {
+        if (san9::d3d11_presenter::HandleWindowMessage(*sourceMessage)) {
+            return g_originalNormalizeWindowMessage(normalizedMessage, sourceMessage);
+        }
         if (san9::cursor_lock::HandleInputMessage(window, *sourceMessage)) {
             return g_originalNormalizeWindowMessage(normalizedMessage, sourceMessage);
         }
