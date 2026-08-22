@@ -20,18 +20,25 @@
   <PropertyGroup><IntDir>$(SolutionDir)build\obj\$(ProjectName)\$(Configuration)\</IntDir></PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><LanguageStandard>stdcpp20</LanguageStandard><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
-    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>d3d11.lib;d3dcompiler.lib;dxgi.lib;gdi32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>d2d1.lib;dwrite.lib;d3d11.lib;d3dcompiler.lib;dxgi.lib;gdi32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\code_hook.cpp" />
     <ClCompile Include="src\cursor_lock.cpp" />
     <ClCompile Include="src\d3d11_presenter.cpp" />
+    <ClCompile Include="src\font_capture.cpp" />
+    <ClCompile Include="src\font_renderer.cpp" />
     <ClCompile Include="src\runtime.cpp" />
     <ClCompile Include="src\status_overlay.cpp" />
     <ClCompile Include="src\viewport.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\code_hook.h" />
     <ClInclude Include="src\cursor_lock.h" />
     <ClInclude Include="src\d3d11_presenter.h" />
+    <ClInclude Include="src\font_capture.h" />
+    <ClInclude Include="src\font_frame.h" />
+    <ClInclude Include="src\font_renderer.h" />
     <ClInclude Include="src\status_overlay.h" />
     <ClInclude Include="src\viewport.h" />
   </ItemGroup>

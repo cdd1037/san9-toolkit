@@ -1,5 +1,7 @@
 #include "d3d11_presenter.h"
 
+#include "font_capture.h"
+#include "font_renderer.h"
 #include "viewport.h"
 
 #include <d3d11.h>
@@ -107,6 +109,7 @@ bool CreateRenderTarget(UINT width, UINT height) {
         // ResizeBuffers requires every direct and indirect back-buffer reference
         // to be released, including bindings retained by the immediate context.
         g_context->ClearState();
+        font_renderer::ReleaseTarget();
         g_renderTarget.Reset();
         g_context->Flush();
         const HRESULT resized = g_swapChain->ResizeBuffers(0, width, height,
@@ -123,6 +126,7 @@ bool CreateRenderTarget(UINT width, UINT height) {
         FAILED(g_device->CreateRenderTargetView(backBuffer.Get(), nullptr, &g_renderTarget))) {
         return false;
     }
+    font_renderer::BindTarget(backBuffer.Get());
     g_backBufferWidth = width;
     g_backBufferHeight = height;
     return true;
@@ -144,15 +148,15 @@ bool EnsureRenderTarget() {
     return CreateRenderTarget(width, height);
 }
 
-bool UploadFrame(HDC framebufferDc) {
+bool ReadFramebuffer(HDC framebufferDc, BITMAP& bitmap) {
     const HGDIOBJ bitmapHandle = GetCurrentObject(framebufferDc, OBJ_BITMAP);
-    BITMAP bitmap{};
-    if (!bitmapHandle ||
-        GetObjectW(bitmapHandle, sizeof(bitmap), &bitmap) != sizeof(bitmap) ||
-        bitmap.bmWidth != kLogicalWidth || bitmap.bmHeight != kLogicalHeight ||
-        bitmap.bmBitsPixel != 16 || !bitmap.bmBits) {
-        return false;
-    }
+    return bitmapHandle &&
+           GetObjectW(bitmapHandle, sizeof(bitmap), &bitmap) == sizeof(bitmap) &&
+           bitmap.bmWidth == kLogicalWidth && std::abs(bitmap.bmHeight) == kLogicalHeight &&
+           bitmap.bmBitsPixel == 16 && bitmap.bmBits;
+}
+
+bool UploadFrame(const BITMAP& bitmap) {
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(g_context->Map(g_frameTexture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -167,6 +171,29 @@ bool UploadFrame(HDC framebufferDc) {
     }
     g_context->Unmap(g_frameTexture.Get(), 0);
     return true;
+}
+
+void DrawScaledFrame(const viewport::Bounds& bounds) {
+    constexpr float clearColor[4]{0.0F, 0.0F, 0.0F, 1.0F};
+    g_context->OMSetRenderTargets(1, g_renderTarget.GetAddressOf(), nullptr);
+    g_context->ClearRenderTargetView(g_renderTarget.Get(), clearColor);
+
+    D3D11_VIEWPORT graphicsViewport{};
+    graphicsViewport.TopLeftX = static_cast<float>(bounds.x);
+    graphicsViewport.TopLeftY = static_cast<float>(bounds.y);
+    graphicsViewport.Width = static_cast<float>(bounds.width);
+    graphicsViewport.Height = static_cast<float>(bounds.height);
+    graphicsViewport.MinDepth = 0.0F;
+    graphicsViewport.MaxDepth = 1.0F;
+    g_context->RSSetViewports(1, &graphicsViewport);
+    g_context->IASetInputLayout(nullptr);
+    g_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g_context->VSSetShader(g_vertexShader.Get(), nullptr, 0);
+    g_context->PSSetShader(g_pixelShader.Get(), nullptr, 0);
+    g_context->PSSetShaderResources(0, 1, g_frameView.GetAddressOf());
+    g_context->Draw(3, 0);
+    ID3D11ShaderResourceView* noResource = nullptr;
+    g_context->PSSetShaderResources(0, 1, &noResource);
 }
 
 } // namespace
@@ -263,32 +290,27 @@ bool Initialize(HWND window) {
 }
 
 bool PresentNow(HDC framebufferDc) {
+    BITMAP bitmap{};
     if (!g_device || !g_context || !g_swapChain || !EnsureRenderTarget() ||
-        !UploadFrame(framebufferDc)) {
+        !ReadFramebuffer(framebufferDc, bitmap)) {
         return false;
     }
 
-    constexpr float clearColor[4]{0.0F, 0.0F, 0.0F, 1.0F};
-    g_context->OMSetRenderTargets(1, g_renderTarget.GetAddressOf(), nullptr);
-    g_context->ClearRenderTargetView(g_renderTarget.Get(), clearColor);
-
     const viewport::Bounds bounds = viewport::Calculate(g_window);
-    D3D11_VIEWPORT graphicsViewport{};
-    graphicsViewport.TopLeftX = static_cast<float>(bounds.x);
-    graphicsViewport.TopLeftY = static_cast<float>(bounds.y);
-    graphicsViewport.Width = static_cast<float>(bounds.width);
-    graphicsViewport.Height = static_cast<float>(bounds.height);
-    graphicsViewport.MinDepth = 0.0F;
-    graphicsViewport.MaxDepth = 1.0F;
-    g_context->RSSetViewports(1, &graphicsViewport);
-    g_context->IASetInputLayout(nullptr);
-    g_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    g_context->VSSetShader(g_vertexShader.Get(), nullptr, 0);
-    g_context->PSSetShader(g_pixelShader.Get(), nullptr, 0);
-    g_context->PSSetShaderResources(0, 1, g_frameView.GetAddressOf());
-    g_context->Draw(3, 0);
-    ID3D11ShaderResourceView* noResource = nullptr;
-    g_context->PSSetShaderResources(0, 1, &noResource);
+    font_frame::Frame fontFrame = font_capture::PrepareFrame(
+        bitmap.bmBits, bitmap.bmWidth, std::abs(bitmap.bmHeight));
+    if (!UploadFrame(bitmap)) {
+        return false;
+    }
+    DrawScaledFrame(bounds);
+    g_context->OMSetRenderTargets(0, nullptr, nullptr);
+    g_context->Flush();
+    if (!font_renderer::Draw(fontFrame, bounds)) {
+        if (!UploadFrame(bitmap)) {
+            return false;
+        }
+        DrawScaledFrame(bounds);
+    }
 
     const HRESULT presented = g_swapChain->Present(0, 0);
     if (presented == DXGI_ERROR_DEVICE_REMOVED || presented == DXGI_ERROR_DEVICE_RESET) {
@@ -324,6 +346,7 @@ void Shutdown() {
         g_context->ClearState();
         g_context->Flush();
     }
+    font_renderer::ReleaseTarget();
     g_pixelShader.Reset();
     g_vertexShader.Reset();
     g_frameView.Reset();
