@@ -4,15 +4,12 @@
 #include "code_hook.h"
 #include "cursor_lock.h"
 #include "d3d11_presenter.h"
-#include "font_capture.h"
-#include "font_renderer.h"
 #include "viewport.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <string>
 
 namespace {
 
@@ -21,7 +18,6 @@ constexpr int kLogicalHeight = 768;
 constexpr char kWindowClass[] = "KOEI_SAN9WINDOW";
 constexpr wchar_t kWindowTitle[] = L"三國志ⅨPK";
 constexpr char kStatusProperty[] = "San9Toolkit.RuntimeStatus";
-constexpr wchar_t kFontEnvironmentVariable[] = L"SAN9_TOOLKIT_FONT_PATH";
 constexpr wchar_t kBootEventEnvironmentVariable[] = L"SAN9_TOOLKIT_BOOT_EVENT";
 constexpr UINT kRedrawMessage = WM_APP + 0x319;
 constexpr std::uintptr_t kNormalizeWindowMessageRva = 0x1CC0B0;
@@ -423,19 +419,6 @@ DWORD WINAPI InstallThread(void*) {
         return 2;
     }
 
-    std::array<wchar_t, 32768> fontPath{};
-    const DWORD fontPathLength = GetEnvironmentVariableW(
-        kFontEnvironmentVariable, fontPath.data(), static_cast<DWORD>(fontPath.size()));
-    if (fontPathLength > 0 && fontPathLength < fontPath.size() &&
-        san9::font_renderer::Initialize(std::wstring_view(fontPath.data(), fontPathLength))) {
-        if (!san9::font_capture::InstallHooks()) {
-            san9::font_renderer::Shutdown();
-            OutputDebugStringW(L"San9Toolkit: font capture hooks were not installed; using original text.\n");
-        }
-    } else {
-        OutputDebugStringW(L"San9Toolkit: external font unavailable; using original text.\n");
-    }
-
     if (!SignalBootReady()) {
         OutputDebugStringW(L"San9Toolkit: launcher boot handshake failed.\n");
         return 4;
@@ -473,9 +456,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void* reserved) {
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
         san9::cursor_lock::Shutdown();
-        san9::font_capture::Shutdown();
         san9::d3d11_presenter::Shutdown();
-        san9::font_renderer::Shutdown();
     }
     return TRUE;
 }

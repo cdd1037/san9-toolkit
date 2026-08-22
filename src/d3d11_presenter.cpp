@@ -1,7 +1,5 @@
 #include "d3d11_presenter.h"
 
-#include "font_capture.h"
-#include "font_renderer.h"
 #include "viewport.h"
 
 #include <d3d11.h>
@@ -109,7 +107,6 @@ bool CreateRenderTarget(UINT width, UINT height) {
         // ResizeBuffers requires every direct and indirect back-buffer reference
         // to be released, including bindings retained by the immediate context.
         g_context->ClearState();
-        font_renderer::ReleaseTarget();
         g_renderTarget.Reset();
         g_context->Flush();
         const HRESULT resized = g_swapChain->ResizeBuffers(0, width, height,
@@ -126,7 +123,6 @@ bool CreateRenderTarget(UINT width, UINT height) {
         FAILED(g_device->CreateRenderTargetView(backBuffer.Get(), nullptr, &g_renderTarget))) {
         return false;
     }
-    font_renderer::BindTarget(backBuffer.Get());
     g_backBufferWidth = width;
     g_backBufferHeight = height;
     return true;
@@ -296,21 +292,10 @@ bool PresentNow(HDC framebufferDc) {
         return false;
     }
 
-    const viewport::Bounds bounds = viewport::Calculate(g_window);
-    font_frame::Frame fontFrame = font_capture::PrepareFrame(
-        bitmap.bmBits, bitmap.bmWidth, std::abs(bitmap.bmHeight));
     if (!UploadFrame(bitmap)) {
         return false;
     }
-    DrawScaledFrame(bounds);
-    g_context->OMSetRenderTargets(0, nullptr, nullptr);
-    g_context->Flush();
-    if (!font_renderer::Draw(fontFrame, bounds)) {
-        if (!UploadFrame(bitmap)) {
-            return false;
-        }
-        DrawScaledFrame(bounds);
-    }
+    DrawScaledFrame(viewport::Calculate(g_window));
 
     const HRESULT presented = g_swapChain->Present(0, 0);
     if (presented == DXGI_ERROR_DEVICE_REMOVED || presented == DXGI_ERROR_DEVICE_RESET) {
@@ -346,7 +331,6 @@ void Shutdown() {
         g_context->ClearState();
         g_context->Flush();
     }
-    font_renderer::ReleaseTarget();
     g_pixelShader.Reset();
     g_vertexShader.Reset();
     g_frameView.Reset();

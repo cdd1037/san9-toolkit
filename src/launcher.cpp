@@ -21,7 +21,6 @@ constexpr std::array<unsigned char, 32> kSupportedSha256{
 };
 constexpr char kWindowClass[] = "KOEI_SAN9WINDOW";
 constexpr char kStatusProperty[] = "San9Toolkit.RuntimeStatus";
-constexpr wchar_t kFontEnvironmentVariable[] = L"SAN9_TOOLKIT_FONT_PATH";
 constexpr wchar_t kBootEventEnvironmentVariable[] = L"SAN9_TOOLKIT_BOOT_EVENT";
 constexpr std::array<char, 16> kPayloadMagic{
     'S', 'A', 'N', '9', 'T', 'O', 'O', 'L', 'K', 'I', 'T', 'D', 'L', 'L', '1', '\0',
@@ -360,16 +359,6 @@ int wmain(int argc, wchar_t* argv[]) {
     }
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
-
-    const std::filesystem::path fontPath = launcherPath.parent_path() / L"font.ttf";
-    if (std::filesystem::is_regular_file(fontPath, filesystemError) && !filesystemError) {
-        if (!SetEnvironmentVariableW(kFontEnvironmentVariable, fontPath.c_str())) {
-            return Fail(L"无法把字体路径传给目标进程。" );
-        }
-    } else {
-        SetEnvironmentVariableW(kFontEnvironmentVariable, nullptr);
-        filesystemError.clear();
-    }
 
     const std::wstring bootEventName =
         L"Local\\San9Toolkit.Boot." + std::to_wstring(GetCurrentProcessId()) + L"." +
