@@ -21,8 +21,6 @@ constexpr std::array<unsigned char, 32> kSupportedSha256{
 };
 constexpr char kWindowClass[] = "KOEI_SAN9WINDOW";
 constexpr char kStatusProperty[] = "San9Toolkit.RuntimeStatus";
-constexpr wchar_t kFontEnvironmentVariable[] = L"SAN9_TOOLKIT_FONT_PATH";
-constexpr wchar_t kBootEventEnvironmentVariable[] = L"SAN9_TOOLKIT_BOOT_EVENT";
 constexpr std::array<char, 16> kPayloadMagic{
     'S', 'A', 'N', '9', 'T', 'O', 'O', 'L', 'K', 'I', 'T', 'D', 'L', 'L', '1', '\0',
 };
@@ -361,25 +359,6 @@ int wmain(int argc, wchar_t* argv[]) {
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
 
-    const std::filesystem::path fontPath = launcherPath.parent_path() / L"font.ttf";
-    if (std::filesystem::is_regular_file(fontPath, filesystemError) && !filesystemError) {
-        if (!SetEnvironmentVariableW(kFontEnvironmentVariable, fontPath.c_str())) {
-            return Fail(L"无法把字体路径传给目标进程。" );
-        }
-    } else {
-        SetEnvironmentVariableW(kFontEnvironmentVariable, nullptr);
-        filesystemError.clear();
-    }
-
-    const std::wstring bootEventName =
-        L"Local\\San9Toolkit.Boot." + std::to_wstring(GetCurrentProcessId()) + L"." +
-        std::to_wstring(GetTickCount64());
-    Handle bootEvent(CreateEventW(nullptr, TRUE, FALSE, bootEventName.c_str()));
-    if (!bootEvent || GetLastError() == ERROR_ALREADY_EXISTS ||
-        !SetEnvironmentVariableW(kBootEventEnvironmentVariable, bootEventName.c_str())) {
-        return Fail(L"无法创建 Runtime 安装握手事件。" );
-    }
-
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
@@ -430,11 +409,6 @@ int wmain(int argc, wchar_t* argv[]) {
     if (!injected) {
         TerminateProcess(processHandle.get(), 1);
         return Fail(L"DLL 注入失败；已终止仍处于挂起状态的目标进程。" );
-    }
-
-    if (WaitForSingleObject(bootEvent.get(), 10'000) != WAIT_OBJECT_0) {
-        TerminateProcess(processHandle.get(), 1);
-        return Fail(L"Runtime 未能在游戏主线程恢复前完成钩子安装。" );
     }
 
     if (ResumeThread(mainThread.get()) == static_cast<DWORD>(-1)) {

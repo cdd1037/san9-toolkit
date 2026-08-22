@@ -1,18 +1,15 @@
 #include <windows.h>
 #include <windowsx.h>
 
-#include "code_hook.h"
 #include "cursor_lock.h"
 #include "d3d11_presenter.h"
-#include "font_capture.h"
-#include "font_renderer.h"
 #include "viewport.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <string>
+#include <limits>
 
 namespace {
 
@@ -21,8 +18,6 @@ constexpr int kLogicalHeight = 768;
 constexpr char kWindowClass[] = "KOEI_SAN9WINDOW";
 constexpr wchar_t kWindowTitle[] = L"三國志ⅨPK";
 constexpr char kStatusProperty[] = "San9Toolkit.RuntimeStatus";
-constexpr wchar_t kFontEnvironmentVariable[] = L"SAN9_TOOLKIT_FONT_PATH";
-constexpr wchar_t kBootEventEnvironmentVariable[] = L"SAN9_TOOLKIT_BOOT_EVENT";
 constexpr UINT kRedrawMessage = WM_APP + 0x319;
 constexpr std::uintptr_t kNormalizeWindowMessageRva = 0x1CC0B0;
 constexpr std::size_t kNormalizeWindowMessagePrologueSize = 8;
@@ -338,6 +333,19 @@ bool PatchImport(const char* importedModule, const char* importedFunction,
     return false;
 }
 
+bool WriteRelativeJump(unsigned char* source, const void* target) {
+    const auto delta = reinterpret_cast<std::intptr_t>(target) -
+                       reinterpret_cast<std::intptr_t>(source + 5);
+    if (delta < std::numeric_limits<std::int32_t>::min() ||
+        delta > std::numeric_limits<std::int32_t>::max()) {
+        return false;
+    }
+    source[0] = 0xE9;
+    const auto displacement = static_cast<std::int32_t>(delta);
+    std::memcpy(source + 1, &displacement, sizeof(displacement));
+    return true;
+}
+
 bool PatchNormalizeWindowMessage() {
     auto* module = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
     if (!module) {
@@ -346,13 +354,42 @@ bool PatchNormalizeWindowMessage() {
     auto* entry = module + kNormalizeWindowMessageRva;
     constexpr std::array<unsigned char, kNormalizeWindowMessagePrologueSize> expected{
         0x83, 0xEC, 0x0C, 0x53, 0x8B, 0x5C, 0x24, 0x18};
-    void* trampoline = nullptr;
-    if (!san9::code_hook::Install(entry, reinterpret_cast<void*>(&ScaledNormalizeWindowMessage),
-                                  expected, &trampoline)) {
+    if (std::memcmp(entry, expected.data(), expected.size()) != 0) {
+        return false;
+    }
+
+    constexpr std::size_t trampolineSize = kNormalizeWindowMessagePrologueSize + 5;
+    auto* trampoline = static_cast<unsigned char*>(VirtualAlloc(
+        nullptr, trampolineSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!trampoline) {
+        return false;
+    }
+    std::memcpy(trampoline, entry, kNormalizeWindowMessagePrologueSize);
+    if (!WriteRelativeJump(trampoline + kNormalizeWindowMessagePrologueSize,
+                           entry + kNormalizeWindowMessagePrologueSize)) {
+        VirtualFree(trampoline, 0, MEM_RELEASE);
+        return false;
+    }
+
+    DWORD oldProtection = 0;
+    if (!VirtualProtect(entry, kNormalizeWindowMessagePrologueSize,
+                        PAGE_EXECUTE_READWRITE, &oldProtection)) {
+        VirtualFree(trampoline, 0, MEM_RELEASE);
         return false;
     }
     g_originalNormalizeWindowMessage =
         reinterpret_cast<NormalizeWindowMessageFunction>(trampoline);
+    const bool jumpWritten = WriteRelativeJump(entry, &ScaledNormalizeWindowMessage);
+    if (jumpWritten) {
+        std::memset(entry + 5, 0x90, kNormalizeWindowMessagePrologueSize - 5);
+    }
+    DWORD ignored = 0;
+    const BOOL restored = VirtualProtect(entry, kNormalizeWindowMessagePrologueSize,
+                                         oldProtection, &ignored);
+    FlushInstructionCache(GetCurrentProcess(), entry, kNormalizeWindowMessagePrologueSize);
+    if (!jumpWritten || !restored) {
+        return false;
+    }
     return true;
 }
 
@@ -361,23 +398,6 @@ bool PatchRequiredHooks() {
            PatchImport("user32.dll", "GetCursorPos", &ScaledGetCursorPos, g_originalGetCursorPos) &&
            PatchImport("user32.dll", "ReleaseDC", &ScaledReleaseDc, g_originalReleaseDc) &&
            PatchNormalizeWindowMessage();
-}
-
-bool SignalBootReady() {
-    std::array<wchar_t, 256> eventName{};
-    const DWORD length = GetEnvironmentVariableW(
-        kBootEventEnvironmentVariable, eventName.data(),
-        static_cast<DWORD>(eventName.size()));
-    if (length == 0 || length >= eventName.size()) {
-        return false;
-    }
-    const HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName.data());
-    if (!event) {
-        return false;
-    }
-    const bool signaled = SetEvent(event) != FALSE;
-    CloseHandle(event);
-    return signaled;
 }
 
 bool InstallWindowBehavior(HWND window) {
@@ -423,24 +443,6 @@ DWORD WINAPI InstallThread(void*) {
         return 2;
     }
 
-    std::array<wchar_t, 32768> fontPath{};
-    const DWORD fontPathLength = GetEnvironmentVariableW(
-        kFontEnvironmentVariable, fontPath.data(), static_cast<DWORD>(fontPath.size()));
-    if (fontPathLength > 0 && fontPathLength < fontPath.size() &&
-        san9::font_renderer::Initialize(std::wstring_view(fontPath.data(), fontPathLength))) {
-        if (!san9::font_capture::InstallHooks()) {
-            san9::font_renderer::Shutdown();
-            OutputDebugStringW(L"San9Toolkit: font capture hooks were not installed; using original text.\n");
-        }
-    } else {
-        OutputDebugStringW(L"San9Toolkit: external font unavailable; using original text.\n");
-    }
-
-    if (!SignalBootReady()) {
-        OutputDebugStringW(L"San9Toolkit: launcher boot handshake failed.\n");
-        return 4;
-    }
-
     for (int attempt = 0; attempt < 600 && (!g_window || !g_framebufferDc); ++attempt) {
         Sleep(50);
     }
@@ -473,9 +475,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void* reserved) {
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
         san9::cursor_lock::Shutdown();
-        san9::font_capture::Shutdown();
         san9::d3d11_presenter::Shutdown();
-        san9::font_renderer::Shutdown();
     }
     return TRUE;
 }
