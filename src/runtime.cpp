@@ -2,7 +2,6 @@
 #include <windowsx.h>
 
 #include "cursor_lock.h"
-#include "status_overlay.h"
 #include "viewport.h"
 
 #include <algorithm>
@@ -100,11 +99,6 @@ bool RenderFullFrame(HWND window, HDC destination) {
     const int previousMode = SetStretchBltMode(destination, COLORONCOLOR);
     const BOOL result = StretchBlt(destination, viewport.x, viewport.y, viewport.width, viewport.height,
                                    source, 0, 0, kLogicalWidth, kLogicalHeight, SRCCOPY);
-    if (result) {
-        const RECT viewportRect{viewport.x, viewport.y,
-                                viewport.x + viewport.width, viewport.y + viewport.height};
-        san9::status_overlay::Draw(destination, viewportRect);
-    }
     if (previousMode != 0) {
         SetStretchBltMode(destination, previousMode);
     }
@@ -335,9 +329,6 @@ BOOL WINAPI ScaledBitBlt(HDC destination, int xDest, int yDest, int width, int h
         SetStretchBltMode(destination, previousMode);
     }
     if (result) {
-        const RECT viewportRect{viewport.x, viewport.y,
-                                viewport.x + viewport.width, viewport.y + viewport.height};
-        san9::status_overlay::Draw(destination, viewportRect);
         InterlockedIncrement(&g_presentSerial);
     }
     return result;
@@ -536,7 +527,6 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void* reserved) {
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
         san9::cursor_lock::Shutdown();
-        san9::status_overlay::Shutdown();
     }
     return TRUE;
 }

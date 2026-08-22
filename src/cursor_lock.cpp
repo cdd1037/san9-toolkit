@@ -71,11 +71,13 @@ void HandleLifecycleBefore(UINT message, WPARAM wParam) {
         InterlockedExchange(&g_windowActive, LOWORD(wParam) == WA_INACTIVE ? 0 : 1);
         if (!IsFlagSet(g_windowActive)) {
             ReleaseClip();
+            status_overlay::Hide();
         }
     } else if (message == WM_ACTIVATEAPP) {
         InterlockedExchange(&g_applicationActive, wParam == FALSE ? 0 : 1);
         if (!IsFlagSet(g_applicationActive)) {
             ReleaseClip();
+            status_overlay::Hide();
         }
     } else if (message == WM_ENTERSIZEMOVE) {
         InterlockedExchange(&g_windowMovingOrSizing, 1);
@@ -98,6 +100,7 @@ void HandleLifecycleAfter(HWND window, UINT message) {
     case WM_DPICHANGED:
     case WM_EXITSIZEMOVE:
         Refresh(window);
+        status_overlay::UpdatePosition(window);
         break;
     default:
         break;
@@ -122,7 +125,7 @@ bool HandleInputMessage(HWND window, MSG& message) {
         if (message.message == WM_KEYDOWN &&
             (message.lParam & (static_cast<LPARAM>(1) << 30)) == 0) {
             const bool enabled = Toggle(window);
-            status_overlay::ShowCursorLockState(enabled);
+            status_overlay::ShowCursorLockState(window, enabled);
         }
         message.message = WM_NULL;
         return true;
@@ -142,6 +145,7 @@ void HandleWindowMessageAfter(HWND window, UINT message) {
 void Shutdown() {
     InterlockedExchange(&g_enabled, 0);
     ReleaseClip();
+    status_overlay::Shutdown();
     g_window = nullptr;
 }
 
