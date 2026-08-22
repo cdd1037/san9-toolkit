@@ -5,7 +5,7 @@
 namespace san9::cursor_lock {
 namespace {
 
-constexpr WPARAM kToggleKey = VK_F10;
+constexpr WPARAM kToggleKey = VK_F12;
 
 HWND g_window = nullptr;
 volatile LONG g_enabled = 0;
