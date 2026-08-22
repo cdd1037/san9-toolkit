@@ -29,19 +29,11 @@ struct VertexOutput {
 };
 
 VertexOutput VertexMain(uint vertexId : SV_VertexID) {
-    const float2 positions[3] = {
-        float2(-1.0,  1.0),
-        float2( 3.0,  1.0),
-        float2(-1.0, -3.0)
-    };
-    const float2 coordinates[3] = {
-        float2(0.0, 0.0),
-        float2(2.0, 0.0),
-        float2(0.0, 2.0)
-    };
+    const float2 coordinates = float2((vertexId << 1) & 2, vertexId & 2);
     VertexOutput output;
-    output.position = float4(positions[vertexId], 0.0, 1.0);
-    output.uv = coordinates[vertexId];
+    output.position = float4(coordinates.x * 2.0 - 1.0,
+                             1.0 - coordinates.y * 2.0, 0.0, 1.0);
+    output.uv = coordinates;
     return output;
 }
 
@@ -181,11 +173,10 @@ bool Initialize(HWND window) {
     swapChainDescription.Windowed = TRUE;
     swapChainDescription.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
-    constexpr std::array<D3D_FEATURE_LEVEL, 4> featureLevels{
+    constexpr std::array<D3D_FEATURE_LEVEL, 3> featureLevels{
         D3D_FEATURE_LEVEL_11_0,
         D3D_FEATURE_LEVEL_10_1,
         D3D_FEATURE_LEVEL_10_0,
-        D3D_FEATURE_LEVEL_9_3,
     };
     D3D_FEATURE_LEVEL createdFeatureLevel{};
     const HRESULT created = D3D11CreateDeviceAndSwapChain(
@@ -202,8 +193,8 @@ bool Initialize(HWND window) {
 
     ComPtr<ID3DBlob> vertexBytecode;
     ComPtr<ID3DBlob> pixelBytecode;
-    if (!CompileShader("VertexMain", "vs_4_0_level_9_3", vertexBytecode) ||
-        !CompileShader("PixelMain", "ps_4_0_level_9_3", pixelBytecode) ||
+    if (!CompileShader("VertexMain", "vs_4_0", vertexBytecode) ||
+        !CompileShader("PixelMain", "ps_4_0", pixelBytecode) ||
         FAILED(g_device->CreateVertexShader(vertexBytecode->GetBufferPointer(),
                                             vertexBytecode->GetBufferSize(), nullptr,
                                             &g_vertexShader)) ||
