@@ -2,6 +2,7 @@
 #include <windowsx.h>
 
 #include "cursor_lock.h"
+#include "d3d11_presenter.h"
 #include "viewport.h"
 
 #include <algorithm>
@@ -31,7 +32,6 @@ BitBltFunction g_originalBitBlt = nullptr;
 GetCursorPosFunction g_originalGetCursorPos = nullptr;
 NormalizeWindowMessageFunction g_originalNormalizeWindowMessage = nullptr;
 HDC g_framebufferDc = nullptr;
-volatile LONG g_clearClient = 1;
 volatile LONG g_presentSerial = 0;
 volatile LONG g_windowBehaviorInstalled = 0;
 
@@ -62,57 +62,9 @@ bool IsTargetWindow(HWND window) {
            std::strcmp(className, kWindowClass) == 0;
 }
 
-void ClearLetterbox(HDC destination, const RECT& client, const Viewport& viewport) {
-    const int clientWidth = client.right - client.left;
-    const int clientHeight = client.bottom - client.top;
-    if (viewport.y > 0) {
-        PatBlt(destination, 0, 0, clientWidth, viewport.y, BLACKNESS);
-    }
-    const int bottom = viewport.y + viewport.height;
-    if (bottom < clientHeight) {
-        PatBlt(destination, 0, bottom, clientWidth, clientHeight - bottom, BLACKNESS);
-    }
-    if (viewport.x > 0) {
-        PatBlt(destination, 0, viewport.y, viewport.x, viewport.height, BLACKNESS);
-    }
-    const int right = viewport.x + viewport.width;
-    if (right < clientWidth) {
-        PatBlt(destination, right, viewport.y, clientWidth - right, viewport.height, BLACKNESS);
-    }
-}
-
-bool RenderFullFrame(HWND window, HDC destination) {
-    const HDC source = g_framebufferDc;
-    if (!destination || !IsLogicalFramebuffer(source)) {
-        return false;
-    }
-    const Viewport viewport = san9::viewport::Calculate(window);
-    if (viewport.width <= 0 || viewport.height <= 0) {
-        return false;
-    }
-
-    RECT client{};
-    if (!GetClientRect(window, &client)) {
-        return false;
-    }
-    ClearLetterbox(destination, client, viewport);
-    const int previousMode = SetStretchBltMode(destination, COLORONCOLOR);
-    const BOOL result = StretchBlt(destination, viewport.x, viewport.y, viewport.width, viewport.height,
-                                   source, 0, 0, kLogicalWidth, kLogicalHeight, SRCCOPY);
-    if (previousMode != 0) {
-        SetStretchBltMode(destination, previousMode);
-    }
-    return result != FALSE;
-}
-
-bool RenderWindow(HWND window) {
-    const HDC destination = GetDC(window);
-    if (!destination) {
-        return false;
-    }
-    const bool result = RenderFullFrame(window, destination);
-    ReleaseDC(window, destination);
-    return result;
+bool RenderWindow() {
+    return IsLogicalFramebuffer(g_framebufferDc) &&
+           san9::d3d11_presenter::Present(g_framebufferDc);
 }
 
 bool MapPhysicalPoint(HWND window, POINT physical, POINT& logical) {
@@ -266,20 +218,16 @@ LRESULT CALLBACK ScalerWindowProc(HWND window, UINT message, WPARAM wParam, LPAR
         return TRUE;
     }
     if (message == kRedrawMessage) {
-        RenderWindow(window);
+        RenderWindow();
         return 0;
     }
-    if (message == WM_SIZE) {
-        InterlockedExchange(&g_clearClient, 1);
-    }
-
     const LONG presentBefore = message == WM_PAINT
                                    ? InterlockedCompareExchange(&g_presentSerial, 0, 0)
                                    : 0;
     const LRESULT result = CallWindowProcA(g_originalWindowProc, window, message, wParam, lParam);
     if (message == WM_PAINT &&
         InterlockedCompareExchange(&g_presentSerial, 0, 0) == presentBefore) {
-        RenderWindow(window);
+        RenderWindow();
     } else if (message == WM_SIZE) {
         InvalidateRect(window, nullptr, FALSE);
     }
@@ -311,23 +259,7 @@ BOOL WINAPI ScaledBitBlt(HDC destination, int xDest, int yDest, int width, int h
         return g_originalBitBlt(destination, xDest, yDest, width, height,
                                 source, xSource, ySource, rop);
     }
-    const Viewport viewport = san9::viewport::Calculate(g_window);
-    if (viewport.width <= 0 || viewport.height <= 0) {
-        return FALSE;
-    }
-    if (InterlockedExchange(&g_clearClient, 0) != 0) {
-        RECT client{};
-        GetClientRect(g_window, &client);
-        ClearLetterbox(destination, client, viewport);
-    }
-
-    const int previousMode = SetStretchBltMode(destination, COLORONCOLOR);
-    const BOOL result = StretchBlt(destination, viewport.x, viewport.y,
-                                   viewport.width, viewport.height, source, 0, 0,
-                                   kLogicalWidth, kLogicalHeight, SRCCOPY);
-    if (previousMode != 0) {
-        SetStretchBltMode(destination, previousMode);
-    }
+    const BOOL result = san9::d3d11_presenter::Present(source) ? TRUE : FALSE;
     if (result) {
         InterlockedIncrement(&g_presentSerial);
     }
@@ -485,6 +417,9 @@ bool InstallWindowBehavior(HWND window) {
     if (!SetWindowTextW(window, kWindowTitle)) {
         return false;
     }
+    if (!san9::d3d11_presenter::Initialize(window)) {
+        return false;
+    }
     san9::cursor_lock::Initialize(window);
     return true;
 }
@@ -527,6 +462,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void* reserved) {
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
         san9::cursor_lock::Shutdown();
+        san9::d3d11_presenter::Shutdown();
     }
     return TRUE;
 }
