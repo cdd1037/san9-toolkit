@@ -2,6 +2,7 @@
 #include <windowsx.h>
 
 #include "cursor_lock.h"
+#include "status_overlay.h"
 #include "viewport.h"
 
 #include <algorithm>
@@ -99,6 +100,11 @@ bool RenderFullFrame(HWND window, HDC destination) {
     const int previousMode = SetStretchBltMode(destination, COLORONCOLOR);
     const BOOL result = StretchBlt(destination, viewport.x, viewport.y, viewport.width, viewport.height,
                                    source, 0, 0, kLogicalWidth, kLogicalHeight, SRCCOPY);
+    if (result) {
+        const RECT viewportRect{viewport.x, viewport.y,
+                                viewport.x + viewport.width, viewport.y + viewport.height};
+        san9::status_overlay::Draw(destination, viewportRect);
+    }
     if (previousMode != 0) {
         SetStretchBltMode(destination, previousMode);
     }
@@ -196,8 +202,13 @@ BOOL WINAPI ScaledGetCursorPos(LPPOINT screenPoint) {
 int __cdecl ScaledNormalizeWindowMessage(MSG* normalizedMessage, MSG* sourceMessage) {
     const HWND window = g_window;
     if (sourceMessage && window && sourceMessage->hwnd == window &&
-        InterlockedCompareExchange(&g_windowBehaviorInstalled, 0, 0) != 0 &&
-        IsHardwareMouseMessage(*sourceMessage)) {
+        InterlockedCompareExchange(&g_windowBehaviorInstalled, 0, 0) != 0) {
+        if (san9::cursor_lock::HandleInputMessage(window, *sourceMessage)) {
+            return g_originalNormalizeWindowMessage(normalizedMessage, sourceMessage);
+        }
+        if (!IsHardwareMouseMessage(*sourceMessage)) {
+            return g_originalNormalizeWindowMessage(normalizedMessage, sourceMessage);
+        }
         POINT physical{GET_X_LPARAM(sourceMessage->lParam), GET_Y_LPARAM(sourceMessage->lParam)};
         const bool wheelMessage = IsWheelMouseMessage(sourceMessage->message);
         if (wheelMessage && !ScreenToClient(window, &physical)) {
@@ -324,6 +335,9 @@ BOOL WINAPI ScaledBitBlt(HDC destination, int xDest, int yDest, int width, int h
         SetStretchBltMode(destination, previousMode);
     }
     if (result) {
+        const RECT viewportRect{viewport.x, viewport.y,
+                                viewport.x + viewport.width, viewport.y + viewport.height};
+        san9::status_overlay::Draw(destination, viewportRect);
         InterlockedIncrement(&g_presentSerial);
     }
     return result;
@@ -522,6 +536,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void* reserved) {
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
         san9::cursor_lock::Shutdown();
+        san9::status_overlay::Shutdown();
     }
     return TRUE;
 }

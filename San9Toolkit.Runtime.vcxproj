@@ -25,10 +25,12 @@
   <ItemGroup>
     <ClCompile Include="src\cursor_lock.cpp" />
     <ClCompile Include="src\runtime.cpp" />
+    <ClCompile Include="src\status_overlay.cpp" />
     <ClCompile Include="src\viewport.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\cursor_lock.h" />
+    <ClInclude Include="src\status_overlay.h" />
     <ClInclude Include="src\viewport.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

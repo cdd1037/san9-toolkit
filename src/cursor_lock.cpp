@@ -1,5 +1,6 @@
 #include "cursor_lock.h"
 
+#include "status_overlay.h"
 #include "viewport.h"
 
 namespace san9::cursor_lock {
@@ -57,29 +58,15 @@ void Refresh(HWND window) {
     }
 }
 
-void Toggle(HWND window) {
+bool Toggle(HWND window) {
     const LONG enabled = InterlockedCompareExchange(&g_enabled, 0, 0);
-    InterlockedExchange(&g_enabled, enabled == 0 ? 1 : 0);
+    const bool nowEnabled = enabled == 0;
+    InterlockedExchange(&g_enabled, nowEnabled ? 1 : 0);
     Refresh(window);
+    return nowEnabled;
 }
 
-} // namespace
-
-void Initialize(HWND window) {
-    g_window = window;
-    const bool active = GetForegroundWindow() == window;
-    InterlockedExchange(&g_windowActive, active ? 1 : 0);
-    InterlockedExchange(&g_applicationActive, active ? 1 : 0);
-}
-
-bool HandleWindowMessageBefore(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
-    if (message == WM_KEYDOWN && wParam == kToggleKey) {
-        if ((lParam & (static_cast<LPARAM>(1) << 30)) == 0) {
-            Toggle(window);
-        }
-        return true;
-    }
-
+void HandleLifecycleBefore(UINT message, WPARAM wParam) {
     if (message == WM_ACTIVATE) {
         InterlockedExchange(&g_windowActive, LOWORD(wParam) == WA_INACTIVE ? 0 : 1);
         if (!IsFlagSet(g_windowActive)) {
@@ -96,10 +83,9 @@ bool HandleWindowMessageBefore(HWND window, UINT message, WPARAM wParam, LPARAM 
     } else if (message == WM_DESTROY || message == WM_NCDESTROY) {
         Shutdown();
     }
-    return false;
 }
 
-void HandleWindowMessageAfter(HWND window, UINT message) {
+void HandleLifecycleAfter(HWND window, UINT message) {
     if (message == WM_EXITSIZEMOVE) {
         InterlockedExchange(&g_windowMovingOrSizing, 0);
     }
@@ -116,6 +102,41 @@ void HandleWindowMessageAfter(HWND window, UINT message) {
     default:
         break;
     }
+}
+
+} // namespace
+
+void Initialize(HWND window) {
+    g_window = window;
+    const bool active = GetForegroundWindow() == window;
+    InterlockedExchange(&g_windowActive, active ? 1 : 0);
+    InterlockedExchange(&g_applicationActive, active ? 1 : 0);
+}
+
+bool HandleInputMessage(HWND window, MSG& message) {
+    HandleLifecycleBefore(message.message, message.wParam);
+    HandleLifecycleAfter(window, message.message);
+
+    if ((message.message == WM_KEYDOWN || message.message == WM_KEYUP) &&
+        message.wParam == kToggleKey) {
+        if (message.message == WM_KEYDOWN &&
+            (message.lParam & (static_cast<LPARAM>(1) << 30)) == 0) {
+            const bool enabled = Toggle(window);
+            status_overlay::ShowCursorLockState(enabled);
+        }
+        message.message = WM_NULL;
+        return true;
+    }
+    return false;
+}
+
+bool HandleWindowMessageBefore(HWND, UINT message, WPARAM wParam, LPARAM) {
+    HandleLifecycleBefore(message, wParam);
+    return false;
+}
+
+void HandleWindowMessageAfter(HWND window, UINT message) {
+    HandleLifecycleAfter(window, message);
 }
 
 void Shutdown() {
