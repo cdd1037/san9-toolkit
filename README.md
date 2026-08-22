@@ -26,8 +26,9 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。
   可缩放窗口；这避免误改启动阶段短暂出现的同类窗口。`WM_SIZING` 保持客户区 4:3。
 - 最大化到非 4:3 屏幕时使用居中黑边。
 - DLL 钩住主模块导入表中的 `BitBlt`，只接受选中 1024×768×16 位 `BI_RGB` DIB 的
-  内存 DC。确认原作提交后，从 DIB 的 X1R5G5B5 像素生成 BGRA8 动态纹理，由 D3D11
-  全屏三角形和点采样 shader 映射到等比缩放视口；可见窗口不再使用 `StretchBlt`。
+  内存 DC。确认原作提交后，把 DIB 的 X1R5G5B5 原始行直接复制到
+  `B5G5R5A1_UNORM` 动态纹理，由 D3D11 全屏三角形和点采样 shader 完成倒置校正并映射到
+  等比缩放视口；CPU 不再逐像素展开 BGRA8，可见窗口也不再使用 `StretchBlt`。
   `BitBlt` hook 只记录最新后缓冲；原作整帧和脏矩形提交均在下一次调用立即
   `ReleaseDC`。Runtime 同时代理该导入，先调用原函数释放目标 HDC，再在同一调用栈执行
   待提交的 DXGI `Present`，避免 GDI 与 swap chain 同时占用主窗口。

@@ -9,7 +9,6 @@
 
 #include <array>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 
 namespace san9::d3d11_presenter {
@@ -22,6 +21,7 @@ using Microsoft::WRL::ComPtr;
 
 constexpr int kLogicalWidth = 1024;
 constexpr int kLogicalHeight = 768;
+constexpr DXGI_FORMAT kFrameTextureFormat = DXGI_FORMAT_B5G5R5A1_UNORM;
 constexpr char kShaderSource[] = R"(
 Texture2D frameTexture : register(t0);
 SamplerState frameSampler : register(s0);
@@ -41,7 +41,9 @@ VertexOutput VertexMain(uint vertexId : SV_VertexID) {
 }
 
 float4 PixelMain(VertexOutput input) : SV_Target {
-    return frameTexture.Sample(frameSampler, input.uv);
+    const float4 color = frameTexture.Sample(
+        frameSampler, float2(input.uv.x, 1.0 - input.uv.y));
+    return float4(color.rgb, 1.0);
 }
 )";
 
@@ -122,7 +124,7 @@ bool UploadFrame(HDC framebufferDc) {
     BITMAP bitmap{};
     if (!bitmapHandle ||
         GetObjectW(bitmapHandle, sizeof(bitmap), &bitmap) != sizeof(bitmap) ||
-        bitmap.bmWidth != kLogicalWidth || std::abs(bitmap.bmHeight) != kLogicalHeight ||
+        bitmap.bmWidth != kLogicalWidth || bitmap.bmHeight != kLogicalHeight ||
         bitmap.bmBitsPixel != 16 || !bitmap.bmBits) {
         return false;
     }
@@ -133,21 +135,10 @@ bool UploadFrame(HDC framebufferDc) {
     }
     const auto* sourceBase = static_cast<const std::uint8_t*>(bitmap.bmBits);
     for (int y = 0; y < kLogicalHeight; ++y) {
-        const int sourceY = kLogicalHeight - 1 - y;
-        const auto* source = reinterpret_cast<const std::uint16_t*>(
-            sourceBase + sourceY * bitmap.bmWidthBytes);
-        auto* destination = reinterpret_cast<std::uint32_t*>(
-            static_cast<std::uint8_t*>(mapped.pData) + y * mapped.RowPitch);
-        for (int x = 0; x < kLogicalWidth; ++x) {
-            const std::uint16_t pixel = source[x];
-            const std::uint32_t red5 = (pixel >> 10) & 0x1F;
-            const std::uint32_t green5 = (pixel >> 5) & 0x1F;
-            const std::uint32_t blue5 = pixel & 0x1F;
-            const std::uint32_t red = (red5 << 3) | (red5 >> 2);
-            const std::uint32_t green = (green5 << 3) | (green5 >> 2);
-            const std::uint32_t blue = (blue5 << 3) | (blue5 >> 2);
-            destination[x] = 0xFF000000u | (red << 16) | (green << 8) | blue;
-        }
+        const auto* source = sourceBase + y * bitmap.bmWidthBytes;
+        auto* destination = static_cast<std::uint8_t*>(mapped.pData) + y * mapped.RowPitch;
+        std::memcpy(destination, source,
+                    static_cast<std::size_t>(kLogicalWidth) * sizeof(std::uint16_t));
     }
     g_context->Unmap(g_frameTexture.Get(), 0);
     return true;
@@ -200,6 +191,15 @@ bool Initialize(HWND window) {
     g_backBufferWidth = 0;
     g_backBufferHeight = 0;
 
+    UINT frameFormatSupport = 0;
+    constexpr UINT requiredFrameFormatSupport =
+        D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_SAMPLE;
+    if (FAILED(g_device->CheckFormatSupport(kFrameTextureFormat, &frameFormatSupport)) ||
+        (frameFormatSupport & requiredFrameFormatSupport) != requiredFrameFormatSupport) {
+        Shutdown();
+        return false;
+    }
+
     ComPtr<ID3DBlob> vertexBytecode;
     ComPtr<ID3DBlob> pixelBytecode;
     if (!CompileShader("VertexMain", "vs_4_0", vertexBytecode) ||
@@ -219,7 +219,7 @@ bool Initialize(HWND window) {
     textureDescription.Height = kLogicalHeight;
     textureDescription.MipLevels = 1;
     textureDescription.ArraySize = 1;
-    textureDescription.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    textureDescription.Format = kFrameTextureFormat;
     textureDescription.SampleDesc.Count = 1;
     textureDescription.Usage = D3D11_USAGE_DYNAMIC;
     textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
