@@ -12,12 +12,17 @@
 #include <cstring>
 
 namespace san9::d3d11_presenter {
+
+bool PresentNow(HDC framebufferDc);
+
 namespace {
 
 using Microsoft::WRL::ComPtr;
 
 constexpr int kLogicalWidth = 1024;
 constexpr int kLogicalHeight = 768;
+constexpr wchar_t kDispatcherClass[] = L"San9Toolkit.D3D11Presenter";
+constexpr UINT kPresentMessage = WM_APP + 0x4D1;
 
 constexpr char kShaderSource[] = R"(
 Texture2D frameTexture : register(t0);
@@ -43,6 +48,10 @@ float4 PixelMain(VertexOutput input) : SV_Target {
 )";
 
 HWND g_window = nullptr;
+HWND g_dispatcher = nullptr;
+HINSTANCE g_instance = nullptr;
+HDC g_pendingFramebufferDc = nullptr;
+volatile LONG g_presentPending = 0;
 UINT g_backBufferWidth = 0;
 UINT g_backBufferHeight = 0;
 ComPtr<ID3D11Device> g_device;
@@ -54,6 +63,52 @@ ComPtr<ID3D11ShaderResourceView> g_frameView;
 ComPtr<ID3D11SamplerState> g_sampler;
 ComPtr<ID3D11VertexShader> g_vertexShader;
 ComPtr<ID3D11PixelShader> g_pixelShader;
+
+LRESULT CALLBACK DispatcherWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == kPresentMessage) {
+        InterlockedExchange(&g_presentPending, 0);
+        if (!PresentNow(g_pendingFramebufferDc)) {
+            OutputDebugStringW(L"San9Toolkit: D3D11 frame presentation failed.\n");
+        }
+        return 0;
+    }
+    if (message == WM_CLOSE) {
+        DestroyWindow(window);
+        return 0;
+    }
+    if (message == WM_NCDESTROY) {
+        g_dispatcher = nullptr;
+        return 0;
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+bool EnsureDispatcherWindow() {
+    if (g_dispatcher) {
+        return true;
+    }
+    if (!g_instance) {
+        HMODULE module = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                  GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(&DispatcherWindowProc), &module)) {
+            return false;
+        }
+        g_instance = module;
+    }
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.lpfnWndProc = &DispatcherWindowProc;
+    windowClass.hInstance = g_instance;
+    windowClass.lpszClassName = kDispatcherClass;
+    if (!RegisterClassExW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        return false;
+    }
+    g_dispatcher = CreateWindowExW(0, kDispatcherClass, L"", 0,
+                                   0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                                   g_instance, nullptr);
+    return g_dispatcher != nullptr;
+}
 
 bool CompileShader(const char* entryPoint, const char* profile, ComPtr<ID3DBlob>& bytecode) {
     ComPtr<ID3DBlob> errors;
@@ -235,7 +290,7 @@ bool Initialize(HWND window) {
     return true;
 }
 
-bool Present(HDC framebufferDc) {
+bool PresentNow(HDC framebufferDc) {
     if (!g_device || !g_context || !g_swapChain || !EnsureRenderTarget() ||
         !UploadFrame(framebufferDc)) {
         return false;
@@ -271,7 +326,30 @@ bool Present(HDC framebufferDc) {
     return SUCCEEDED(presented);
 }
 
+bool RequestPresent(HDC framebufferDc) {
+    if (!framebufferDc || !g_device || !EnsureDispatcherWindow()) {
+        return false;
+    }
+    g_pendingFramebufferDc = framebufferDc;
+    if (InterlockedExchange(&g_presentPending, 1) == 0 &&
+        !PostMessageW(g_dispatcher, kPresentMessage, 0, 0)) {
+        InterlockedExchange(&g_presentPending, 0);
+        return false;
+    }
+    return true;
+}
+
 void Shutdown() {
+    InterlockedExchange(&g_presentPending, 0);
+    g_pendingFramebufferDc = nullptr;
+    if (g_dispatcher) {
+        DWORD dispatcherThread = GetWindowThreadProcessId(g_dispatcher, nullptr);
+        if (dispatcherThread == GetCurrentThreadId()) {
+            DestroyWindow(g_dispatcher);
+        } else {
+            PostMessageW(g_dispatcher, WM_CLOSE, 0, 0);
+        }
+    }
     if (g_context) {
         g_context->ClearState();
         g_context->Flush();

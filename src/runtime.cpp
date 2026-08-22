@@ -64,7 +64,7 @@ bool IsTargetWindow(HWND window) {
 
 bool RenderWindow() {
     return IsLogicalFramebuffer(g_framebufferDc) &&
-           san9::d3d11_presenter::Present(g_framebufferDc);
+           san9::d3d11_presenter::RequestPresent(g_framebufferDc);
 }
 
 bool MapPhysicalPoint(HWND window, POINT physical, POINT& logical) {
@@ -259,7 +259,7 @@ BOOL WINAPI ScaledBitBlt(HDC destination, int xDest, int yDest, int width, int h
         return g_originalBitBlt(destination, xDest, yDest, width, height,
                                 source, xSource, ySource, rop);
     }
-    const BOOL result = san9::d3d11_presenter::Present(source) ? TRUE : FALSE;
+    const BOOL result = san9::d3d11_presenter::RequestPresent(source) ? TRUE : FALSE;
     if (result) {
         InterlockedIncrement(&g_presentSerial);
     }
