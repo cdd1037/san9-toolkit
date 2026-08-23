@@ -91,6 +91,12 @@ Core UI 的官方构建。下载该版本的 Windows x64 SDK 后，可将 `core-
 ./build.ps1 -CoreUiRoot C:\SDK\core-ui-v1.7.0
 ```
 
+测试使用独立入口，不会读取游戏、影片或其他原版资源：
+
+```powershell
+./test.ps1
+```
+
 生成可发布 ZIP 和 SHA-256 校验文件：
 
 ```powershell
@@ -103,9 +109,9 @@ Core UI 的官方构建。下载该版本的 Windows x64 SDK 后，可将 `core-
 修改 UIX 后无需重新编译。缺少或无法解析 UIX 时程序会明确启动失败，不使用内嵌回退。
 Runtime DLL 同样不内嵌、不释放也不缓存。
 
-构建会先运行影片播放器的状态与时序单元测试。若需对本机原作影片做只读的 Media
-Foundation 全量解码验证，可构建 `San9Toolkit.MovieProbe.vcxproj`，再把影片目录作为唯一
-参数传给生成的 `San9Toolkit.MovieProbe.exe`；探针不复制或修改影片。
+CI 会先运行不依赖游戏资源的状态、缓冲和时序逻辑测试，再单独构建和打包。若需对本机原作
+影片做只读的 Media Foundation 全量解码验证，可构建 `San9Toolkit.MovieProbe.vcxproj`，
+再把影片目录作为唯一参数传给生成的 `San9Toolkit.MovieProbe.exe`；探针不复制或修改影片。
 
 ## 使用
 

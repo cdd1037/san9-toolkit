@@ -24,7 +24,11 @@ jobs:
           Expand-Archive -LiteralPath $archive -DestinationPath $sdkParent
           "CORE_UI_ROOT=$sdkParent\core-ui-v1.7.0" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Build, test and package
+      - name: Test
+        shell: pwsh
+        run: ./test.ps1 -Configuration Release
+
+      - name: Build and package
         shell: pwsh
         run: ./package.ps1 -CoreUiRoot $env:CORE_UI_ROOT
 
