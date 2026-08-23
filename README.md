@@ -118,6 +118,7 @@ GameReport=1
 PlayBGM=1
 PlaySound=1
 PlayMovie=1
+FlagData=7681
 FullScreen=0
 ```
 
@@ -132,6 +133,10 @@ FullScreen=0
 `2=暫停`；`GameReport` 对应界面“進行記錄”，为 `0=OFF`、`1=要約`、`2=詳細`。
 当前目标版本只加载、范围夹取和保存 `GameSpeed`，未发现运行时消费者；Toolkit 的 2×
 虚拟时钟不读取该项。`GameReportDlg` 和 `JumpList` 的三档标签仍待确认。
+
+“地图滚动方式”对应原作 F8：`FlagData` 的 `0x1000` 位设置时为边缘悬停滚动，清除时为
+按住左键滚动。GUI 修改该位时会保留 `FlagData` 的其他位；缺少此项时采用原作编译默认值
+`7681 (0x1E01)`，即边缘悬停。
 
 影片播放由 Toolkit 在游戏窗口内完成：Media Foundation 解码原作实际为 AVI 的
 WMV3/MP3 文件，XAudio2 提供独立于游戏倍率的音频主时钟，画面复用游戏现有 D3D11
@@ -148,9 +153,9 @@ WMV3/MP3 文件，XAudio2 提供独立于游戏倍率的音频主时钟，画面
 | 原作维护的试用剧情状态 | `TrialStory00`、`TrialStory01`、`TrialStoryEvent`、`TrialStoryClear` |
 
 空 INI 启动时不会主动补齐这些键；原作查询缺值后使用自身默认值，实际保存对应状态时才由
-Toolkit 写入。位置、位集合和剧情进度不作为用户开关，示例文件只用注释登记其名称。
-`FlagData` 是包含界面及地图行为等内容的通用打包标志，并非单纯的解锁数据；`ArtData`
-的逐位语义仍待确认。
+Toolkit 写入。位置、`ArtData` 和剧情进度不作为用户开关，示例文件只用注释登记其名称。
+`FlagData` 是包含界面及地图行为等内容的通用打包标志，并非单纯的解锁数据；GUI 仅暴露
+已确认的地图滚动位，保存时保留其他位。`ArtData` 的逐位语义仍待确认。
 
 ## 安全与恢复
 

@@ -1,4 +1,5 @@
 #include "movie_state.h"
+#include "toolkit_config.h"
 
 #include <array>
 #include <cassert>
@@ -49,5 +50,18 @@ int main() {
     assert(!ReadyAfterUnderrun(kPrebufferDuration - 1, 1, false));
     assert(ReadyAfterUnderrun(kPrebufferDuration, 1, false));
     assert(ReadyAfterUnderrun(1, 1, true));
+
+    using san9::toolkit_config::EdgeScrollMode;
+    using san9::toolkit_config::GetEdgeScrollMode;
+    using san9::toolkit_config::SetEdgeScrollMode;
+    constexpr DWORD unrelatedFlags = 0xA5A5001F;
+    const DWORD hoverFlags = SetEdgeScrollMode(unrelatedFlags, EdgeScrollMode::Hover);
+    assert(GetEdgeScrollMode(hoverFlags) == EdgeScrollMode::Hover);
+    assert((hoverFlags & ~san9::toolkit_config::kHoverEdgeScrollFlag) ==
+           (unrelatedFlags & ~san9::toolkit_config::kHoverEdgeScrollFlag));
+    const DWORD holdFlags = SetEdgeScrollMode(hoverFlags, EdgeScrollMode::HoldLeftButton);
+    assert(GetEdgeScrollMode(holdFlags) == EdgeScrollMode::HoldLeftButton);
+    assert((holdFlags & ~san9::toolkit_config::kHoverEdgeScrollFlag) ==
+           (unrelatedFlags & ~san9::toolkit_config::kHoverEdgeScrollFlag));
     return 0;
 }

@@ -8,6 +8,26 @@
 
 namespace san9::toolkit_config {
 
+enum class EdgeScrollMode : DWORD {
+    Hover = 0,
+    HoldLeftButton = 1,
+};
+
+constexpr DWORD kDefaultFlagData = 0x00001E01;
+constexpr DWORD kHoverEdgeScrollFlag = 0x00001000;
+
+constexpr EdgeScrollMode GetEdgeScrollMode(DWORD flagData) {
+    return (flagData & kHoverEdgeScrollFlag) != 0
+               ? EdgeScrollMode::Hover
+               : EdgeScrollMode::HoldLeftButton;
+}
+
+constexpr DWORD SetEdgeScrollMode(DWORD flagData, EdgeScrollMode mode) {
+    return mode == EdgeScrollMode::Hover
+               ? flagData | kHoverEdgeScrollFlag
+               : flagData & ~kHoverEdgeScrollFlag;
+}
+
 struct Settings {
     std::wstring gameExecutable;
     std::wstring documentsRoot;
@@ -21,6 +41,8 @@ struct Settings {
     bool playBgm = true;
     bool playSound = true;
     bool playMovie = true;
+    DWORD flagData = kDefaultFlagData;
+    EdgeScrollMode edgeScrollMode = EdgeScrollMode::Hover;
 };
 
 inline std::wstring ReadString(const std::filesystem::path& path, const wchar_t* section,
@@ -62,6 +84,9 @@ inline Settings Load(const std::filesystem::path& path) {
     result.playBgm = ReadDword(path, L"Configs", L"PlayBGM", 1, 0, 1) != 0;
     result.playSound = ReadDword(path, L"Configs", L"PlaySound", 1, 0, 1) != 0;
     result.playMovie = ReadDword(path, L"Configs", L"PlayMovie", 1, 0, 1) != 0;
+    result.flagData = ReadDword(path, L"Configs", L"FlagData", kDefaultFlagData,
+                                0, MAXDWORD);
+    result.edgeScrollMode = GetEdgeScrollMode(result.flagData);
     return result;
 }
 
@@ -77,6 +102,7 @@ inline bool Save(const std::filesystem::path& path, const Settings& value) {
         return false;
     }
     const auto number = [](DWORD item) { return std::to_wstring(item); };
+    const DWORD flagData = SetEdgeScrollMode(value.flagData, value.edgeScrollMode);
     const bool saved =
         WriteValue(path, L"Toolkit", L"GameExecutable", value.gameExecutable) &&
         WriteValue(path, L"Toolkit", L"DocumentsRoot", value.documentsRoot) &&
@@ -90,6 +116,7 @@ inline bool Save(const std::filesystem::path& path, const Settings& value) {
         WriteValue(path, L"Configs", L"PlayBGM", number(value.playBgm)) &&
         WriteValue(path, L"Configs", L"PlaySound", number(value.playSound)) &&
         WriteValue(path, L"Configs", L"PlayMovie", number(value.playMovie)) &&
+        WriteValue(path, L"Configs", L"FlagData", number(flagData)) &&
         WriteValue(path, L"Configs", L"FullScreen", L"0");
     if (!saved) {
         return false;

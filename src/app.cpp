@@ -29,7 +29,7 @@ struct AppState {
     UiPage page{};
     UiWindow window{};
     UiWidget gamePath{}, documentsPath{}, title{}, hotkeyLabel{};
-    UiWidget messageSpeed{}, gameReport{}, playBgm{}, playSound{}, playMovie{};
+    UiWidget messageSpeed{}, gameReport{}, edgeScroll{}, playBgm{}, playSound{}, playMovie{};
     UiWidget dpiScale{}, borderless{}, speed{}, launch{};
     std::array<UiWidget, 4> navigation{};
     UiWidget pages{};
@@ -116,6 +116,8 @@ void PullControls() {
     g_app.settings.windowTitle = ui_text_input_get_text(g_app.title);
     g_app.settings.messageSpeed = static_cast<DWORD>(ui_combobox_get_selected(g_app.messageSpeed));
     g_app.settings.gameReport = static_cast<DWORD>(ui_combobox_get_selected(g_app.gameReport));
+    g_app.settings.edgeScrollMode = static_cast<san9::toolkit_config::EdgeScrollMode>(
+        ui_combobox_get_selected(g_app.edgeScroll));
     g_app.settings.playBgm = ui_toggle_get_on(g_app.playBgm) != 0;
     g_app.settings.playSound = ui_toggle_get_on(g_app.playSound) != 0;
     g_app.settings.playMovie = ui_toggle_get_on(g_app.playMovie) != 0;
@@ -216,6 +218,8 @@ LRESULT CALLBACK WindowSubclass(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         g_app.settings = san9::toolkit_config::Load(g_app.configPath);
         ui_combobox_set_selected(g_app.messageSpeed, static_cast<int>(g_app.settings.messageSpeed));
         ui_combobox_set_selected(g_app.gameReport, static_cast<int>(g_app.settings.gameReport));
+        ui_combobox_set_selected(g_app.edgeScroll,
+                                 static_cast<int>(g_app.settings.edgeScrollMode));
         ui_toggle_set_on(g_app.playBgm, g_app.settings.playBgm); ui_toggle_set_on(g_app.playSound, g_app.settings.playSound);
         ui_toggle_set_on(g_app.playMovie, g_app.settings.playMovie); ui_widget_set_enabled(g_app.launch, 1);
         ui_window_show_immediate(g_app.window); SetForegroundWindow(hwnd);
@@ -240,6 +244,7 @@ bool BindLayout() {
     g_app.hotkeyLabel = Widget("hotkeyLabel");
     g_app.messageSpeed = Widget("messageSpeed");
     g_app.gameReport = Widget("gameReport");
+    g_app.edgeScroll = Widget("edgeScroll");
     g_app.playBgm = Widget("playBgm");
     g_app.playSound = Widget("playSound");
     g_app.playMovie = Widget("playMovie");
@@ -256,7 +261,8 @@ bool BindLayout() {
     g_app.navigation = {Widget("navPath"), Widget("navTools"), Widget("navGame"), Widget("navAbout")};
     g_app.pages = Widget("pages");
     if (!g_app.gamePath || !g_app.documentsPath || !g_app.title || !g_app.hotkeyLabel ||
-        !g_app.messageSpeed || !g_app.gameReport || !g_app.playBgm || !g_app.playSound ||
+        !g_app.messageSpeed || !g_app.gameReport || !g_app.edgeScroll ||
+        !g_app.playBgm || !g_app.playSound ||
         !g_app.playMovie || !g_app.dpiScale || !g_app.borderless || !g_app.speed ||
         !g_app.launch || !browseGame || !browseDocuments || !captureKey || !save ||
         !reportPlaceholder || !jumpPlaceholder ||
@@ -299,6 +305,8 @@ void PopulateControls() {
     ui_label_set_text(g_app.hotkeyLabel, KeyName(g_app.settings.cursorLockVirtualKey).c_str());
     ui_combobox_set_selected(g_app.messageSpeed, static_cast<int>(g_app.settings.messageSpeed));
     ui_combobox_set_selected(g_app.gameReport, static_cast<int>(g_app.settings.gameReport));
+    ui_combobox_set_selected(g_app.edgeScroll,
+                             static_cast<int>(g_app.settings.edgeScrollMode));
     ui_toggle_set_on_immediate(g_app.playBgm, g_app.settings.playBgm); ui_toggle_set_on_immediate(g_app.playSound, g_app.settings.playSound);
     ui_toggle_set_on_immediate(g_app.playMovie, g_app.settings.playMovie); ui_toggle_set_on_immediate(g_app.dpiScale, g_app.settings.scaleInitialWindowForSystemDpi);
     ui_toggle_set_on_immediate(g_app.borderless, g_app.settings.borderlessWindow);

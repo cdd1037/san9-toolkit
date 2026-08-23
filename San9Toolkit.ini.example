@@ -29,6 +29,9 @@ PlayMovie=1
 ; The exact labels for the remaining three-state options are not yet confirmed.
 MessageSpeed=1
 GameReport=1
+; Map edge scrolling: bit 0x1000 set = hover, clear = hold left button.
+; 7681 (0x1E01) is the original compiled default and selects hover.
+FlagData=7681
 GameReportDlg=1
 JumpList=1
 SvLdPage=0
@@ -45,8 +48,8 @@ SvLdPage=0
 ; AppPositionX=
 ; AppPositionY=
 ;
-; Packed game state. Bit meanings are not yet fully mapped:
-; FlagData=
+; Other packed game state. FlagData is maintained by the GUI while preserving
+; every bit except the confirmed edge-scroll bit:
 ; ArtData=
 ;
 ; Trial-story progress:

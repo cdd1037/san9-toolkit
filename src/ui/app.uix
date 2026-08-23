@@ -165,6 +165,10 @@
                 <div class="row-copy"><label class="row-title">游戏速度</label><small class="row-help">1 倍为原速，2～4 倍会加快游戏运行</small></div>
                 <select id="gameSpeed" class="control"><option>1x</option><option>2x</option><option>3x</option><option>4x</option></select>
               </div>
+              <div class="row">
+                <div class="row-copy"><label class="row-title">地图滚动方式</label><small class="row-help">对应游戏中的 F8 切换功能</small></div>
+                <select id="edgeScroll" class="control"><option>边缘悬停</option><option>按住左键</option></select>
+              </div>
             </div>
 
             <div id="gameCard" class="card">
