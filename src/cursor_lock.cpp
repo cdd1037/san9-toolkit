@@ -6,9 +6,8 @@
 namespace san9::cursor_lock {
 namespace {
 
-constexpr WPARAM kToggleKey = VK_F12;
-
 HWND g_window = nullptr;
+UINT g_toggleKey = VK_F12;
 volatile LONG g_enabled = 0;
 volatile LONG g_clipApplied = 0;
 volatile LONG g_windowActive = 0;
@@ -109,8 +108,9 @@ void HandleLifecycleAfter(HWND window, UINT message) {
 
 } // namespace
 
-void Initialize(HWND window) {
+void Initialize(HWND window, UINT toggleKey) {
     g_window = window;
+    g_toggleKey = toggleKey;
     const bool active = GetForegroundWindow() == window;
     InterlockedExchange(&g_windowActive, active ? 1 : 0);
     InterlockedExchange(&g_applicationActive, active ? 1 : 0);
@@ -121,7 +121,7 @@ bool HandleInputMessage(HWND window, MSG& message) {
     HandleLifecycleAfter(window, message.message);
 
     if ((message.message == WM_KEYDOWN || message.message == WM_KEYUP) &&
-        message.wParam == kToggleKey) {
+        message.wParam == g_toggleKey) {
         if (message.message == WM_KEYDOWN &&
             (message.lParam & (static_cast<LPARAM>(1) << 30)) == 0) {
             const bool enabled = Toggle(window);

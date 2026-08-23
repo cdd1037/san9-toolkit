@@ -1,0 +1,228 @@
+<window title="三国志 IX 工具箱" width="830" height="700"
+        min-width="830" min-height="700"
+        resizable="false" centered="true" frameless="true" theme="light"/>
+
+<style scoped>
+  .shell { background: #F3F4F6; }
+  TitleBar { background: #FFFFFF; color: #1F2937; }
+
+  .workspace { width: 830px; height: 660px; background: #F3F4F6; }
+  .sidebar {
+    width: 210px; height: 660px;
+    padding: 28px 18px;
+    background: #F8F9FB;
+    border-right: 1px solid #E2E5E9;
+  }
+  .brand-name { width: 174px; color: #111827; font-size: 19px; font-weight: 700; }
+  .brand-copy { width: 174px; color: #6B7280; font-size: 13px; margin-top: 6px; margin-bottom: 34px; }
+  .nav-caption { width: 174px; color: #9CA3AF; font-size: 13px; font-weight: 600; margin-bottom: 9px; }
+  .nav-entry { width: 174px; height: 40px; font-size: 14px; margin-bottom: 5px; }
+  .support {
+    width: 174px;
+    padding: 12px;
+    color: #6B7280; background: #FFFFFF;
+    border: 1px solid #E2E5E9; border-radius: 10px;
+    font-size: 13px;
+    margin-top: 218px;
+  }
+  .support-strong { width: 148px; color: #374151; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+
+  .main { width: 620px; height: 660px; background: #F3F4F6; }
+  .main-scroll { width: 620px; height: 598px; }
+  .content { width: 620px; height: 598px; padding: 18px 18px 26px 18px; }
+
+  .card {
+    width: 584px;
+    padding: 19px 20px;
+    background: #FFFFFF;
+    border: 1px solid #E1E4E8;
+    border-radius: 12px;
+    box-shadow: 0 4px 14px rgba(31,41,55,0.07);
+    margin-bottom: 16px;
+  }
+  .card-head { width: 544px; flex-direction: row; align-items: center; margin-bottom: 5px; }
+  .card-icon {
+    width: 28px; height: 28px; padding: 5px 0px;
+    color: #2563EB; background: #E8F0FE;
+    border-radius: 7px; text-align: center; font-size: 13px; font-weight: 700;
+    margin-right: 10px;
+  }
+  .card-heading { width: 506px; color: #1F2937; font-size: 18px; font-weight: 700; }
+
+  .row {
+    width: 544px; min-height: 54px;
+    padding: 9px 3px;
+    flex-direction: row; align-items: center;
+    border-top: 1px solid #ECEEF1;
+  }
+  .row-copy { width: 235px; }
+  .row-title { width: 235px; color: #1F2937; font-size: 15px; font-weight: 600; }
+  .row-help { width: 235px; color: #6B7280; font-size: 13px; margin-top: 3px; }
+  .control { width: 300px; }
+  .control-slot { width: 300px; }
+  .path-copy { width: 125px; }
+  .path-title { width: 125px; color: #1F2937; font-size: 15px; font-weight: 600; }
+  .path-help { width: 125px; color: #6B7280; font-size: 13px; margin-top: 3px; }
+  .path-input { width: 303px; }
+  .browse { width: 100px; margin-left: 8px; }
+  .hotkey-value {
+    width: 192px; height: 32px;
+    padding: 7px 11px;
+    color: #2563EB; background: #F8FAFC;
+    border: 1px solid #DDE1E6; border-radius: 7px;
+    font-size: 14px; font-weight: 700;
+  }
+  .hotkey-button { width: 98px; margin-left: 8px; }
+  .pending { opacity: 0.48; }
+  .inline-note {
+    width: 544px;
+    padding: 10px 11px;
+    color: #4B5563; background: #F6F8FA;
+    border: 1px solid #E2E5E9; border-radius: 8px;
+    font-size: 13px;
+    margin-top: 10px;
+  }
+  .about-item {
+    width: 544px;
+    padding: 13px 3px;
+    border-top: 1px solid #ECEEF1;
+  }
+  .about-title { width: 538px; color: #1F2937; font-size: 15px; font-weight: 600; }
+  .about-copy { width: 538px; color: #6B7280; font-size: 13px; margin-top: 4px; }
+  .about-meta-title { width: 520px; color: #374151; font-size: 14px; font-weight: 600; }
+  .about-meta-copy { width: 520px; color: #6B7280; font-size: 13px; margin-top: 4px; }
+
+  .footer {
+    width: 620px; height: 62px;
+    padding: 14px 24px;
+    flex-direction: row; align-items: center;
+    background: #FFFFFF;
+    border-top: 1px solid #E2E5E9;
+    box-shadow: 0 -3px 12px rgba(31,41,55,0.06);
+  }
+  .footer-state { width: 332px; color: #6B7280; font-size: 13px; }
+  .save { width: 100px; margin-right: 10px; }
+  .launch { width: 130px; color: #FFFFFF; background: #2563EB; font-weight: 700; }
+  input, select, button { font-size: 14px; }
+  button:hover { opacity: 0.92; }
+</style>
+
+<template>
+  <div class="shell">
+    <TitleBar title="三国志 IX 工具箱" show-minimize="true" show-maximize="false" show-close="true" show-icon="false"/>
+    <SplitView class="workspace" mode="inline" openPaneLength="210" open="true">
+      <div class="sidebar">
+        <label class="brand-name">三国志 IX 工具箱</label>
+        <p class="brand-copy">便携启动 · 显示优化</p>
+        <label class="nav-caption">功能导航</label>
+        <NavItem id="navPath" class="nav-entry" text="游戏位置" selected="true"/>
+        <NavItem id="navTools" class="nav-entry" text="显示与操作"/>
+        <NavItem id="navGame" class="nav-entry" text="游戏选项"/>
+        <NavItem id="navAbout" class="nav-entry" text="关于工具箱"/>
+        <div class="support">
+          <label class="support-strong">当前适用版本</label>
+          <label>繁体中文版 1.0.1.0</label>
+        </div>
+      </div>
+
+      <div class="main">
+        <ScrollView class="main-scroll">
+          <Stack id="pages" class="content" active="0">
+            <div id="pathCard" class="card">
+              <div class="card-head"><label class="card-icon">01</label><h2 class="card-heading">游戏位置</h2></div>
+              <div class="row">
+                <div class="path-copy"><label class="path-title">游戏主程序</label><small class="path-help">请选择 San9PK.exe</small></div>
+                <input id="gamePath" class="path-input" type="text" placeholder="请选择 San9PK.exe"/>
+                <button id="browseGame" class="browse">选择文件</button>
+              </div>
+              <div class="row">
+                <div class="path-copy"><label class="path-title">游戏文档位置</label><small class="path-help">默认为“文档\Koei”</small></div>
+                <input id="documentsPath" class="path-input" type="text" placeholder="Documents\Koei"/>
+                <button id="browseDocuments" class="browse">选择文件夹</button>
+              </div>
+              <p class="inline-note">这个文档位置目前只会被记住，暂不会改变游戏读取存档的位置。</p>
+            </div>
+
+            <div id="toolsCard" class="card">
+              <div class="card-head"><label class="card-icon">02</label><h2 class="card-heading">显示与操作</h2></div>
+              <div class="row">
+                <div class="row-copy"><label class="row-title">锁定鼠标快捷键</label><small class="row-help">游戏中按下可锁定或释放鼠标</small></div>
+                <label id="hotkeyLabel" class="hotkey-value">F12</label><button id="captureKey" class="hotkey-button">更改按键</button>
+              </div>
+              <div class="row">
+                <div class="row-copy"><label class="row-title">自动调整窗口大小</label><small class="row-help">按 Windows 显示比例放大窗口</small></div>
+                <div class="control-slot"><Toggle id="dpiScale"></Toggle></div>
+              </div>
+              <div class="row">
+                <div class="row-copy"><label class="row-title">无边框窗口</label><small class="row-help">隐藏标题栏和边框，窗口大小保持不变</small></div>
+                <div class="control-slot"><Toggle id="borderless"></Toggle></div>
+              </div>
+              <div class="row">
+                <div class="row-copy"><label class="row-title">窗口标题</label><small class="row-help">留空时显示原来的游戏标题</small></div>
+                <input id="windowTitle" class="control" type="text" placeholder="三國志ⅨPK"/>
+              </div>
+              <div class="row">
+                <div class="row-copy"><label class="row-title">游戏速度</label><small class="row-help">1 倍为原速，2～4 倍会加快游戏运行</small></div>
+                <select id="gameSpeed" class="control"><option>1x</option><option>2x</option><option>3x</option><option>4x</option></select>
+              </div>
+            </div>
+
+            <div id="gameCard" class="card">
+              <div class="card-head"><label class="card-icon">03</label><h2 class="card-heading">游戏选项</h2></div>
+              <div class="row">
+                <div class="row-copy"><label class="row-title">消息速度</label><small class="row-help">调整文字和消息的显示速度</small></div>
+                <select id="messageSpeed" class="control"><option>快</option><option>普通</option><option>暂停</option></select>
+              </div>
+              <div class="row">
+                <div class="row-copy"><label class="row-title">进行记录</label><small class="row-help">选择阶段报告的详细程度</small></div>
+                <select id="gameReport" class="control"><option>OFF</option><option>要约</option><option>详细</option></select>
+              </div>
+              <div class="row"><div class="row-copy"><label class="row-title">背景音乐</label><small class="row-help">播放游戏背景音乐</small></div><div class="control-slot"><Toggle id="playBgm"></Toggle></div></div>
+              <div class="row"><div class="row-copy"><label class="row-title">音效</label><small class="row-help">播放游戏音效</small></div><div class="control-slot"><Toggle id="playSound"></Toggle></div></div>
+              <div class="row"><div class="row-copy"><label class="row-title">动画</label><small class="row-help">播放原作动画</small></div><div class="control-slot"><Toggle id="playMovie"></Toggle></div></div>
+              <div class="row pending">
+                <div class="row-copy"><label class="row-title">报告窗口（暂不可用）</label><small class="row-help">仍在确认原作的实际效果</small></div>
+                <select id="reportDialogPlaceholder" class="control"><option>尚未开放</option></select>
+              </div>
+              <div class="row pending">
+                <div class="row-copy"><label class="row-title">快速定位（暂不可用）</label><small class="row-help">仍在确认原作的实际效果</small></div>
+                <select id="jumpListPlaceholder" class="control"><option>尚未开放</option></select>
+              </div>
+            </div>
+
+            <div id="aboutCard" class="card">
+              <div class="card-head"><label class="card-icon">04</label><h2 class="card-heading">关于工具箱</h2></div>
+              <div class="about-item">
+                <label class="about-title">摆脱注册表依赖</label>
+                <p class="about-copy">即使 Windows 注册表中没有游戏设置，也能正常启动；相关设置由工具箱单独保存。</p>
+              </div>
+              <div class="about-item">
+                <label class="about-title">使用现代画面输出</label>
+                <p class="about-copy">通过 D3D11 重新呈现游戏画面，为高分屏缩放、无边框窗口等功能提供基础。</p>
+              </div>
+              <div class="about-item">
+                <label class="about-title">提供可调游戏速度</label>
+                <p class="about-copy">无需修改游戏数据，即可选择 1～4 倍运行速度。</p>
+              </div>
+              <div class="about-item">
+                <label class="about-title">保留原版游戏</label>
+                <p class="about-copy">所有功能只在通过工具箱启动时生效，不会改写 San9PK.exe 或原版资源。</p>
+              </div>
+              <div class="inline-note">
+                <label class="about-meta-title">作者：虹乡俗人　·　2026 年 8 月 23 日　·　0.1.0 预览版</label>
+                <p class="about-meta-copy">本工具箱诞生于《三国志 IX》现代游戏引擎重制项目，是重制过程中的阶段性成果，也算是正式重制前的一次预热。</p>
+                <p class="about-meta-copy">当前适用于《三国志 IX 威力加强版》繁体中文版 1.0.1.0。</p>
+              </div>
+            </div>
+          </Stack>
+        </ScrollView>
+
+        <div class="footer">
+          <label class="footer-state">启动游戏时会自动保存设置</label>
+          <button id="save" class="save">保存</button>
+          <button id="launch" class="launch">启动游戏</button>
+        </div>
+      </div>
+    </SplitView>
+  </div>
+</template>

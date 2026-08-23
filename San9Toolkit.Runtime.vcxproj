@@ -38,6 +38,7 @@
     <ClInclude Include="src\import_hook.h" />
     <ClInclude Include="src\registry_overlay.h" />
     <ClInclude Include="src\status_overlay.h" />
+    <ClInclude Include="src\toolkit_config.h" />
     <ClInclude Include="src\viewport.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

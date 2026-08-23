@@ -1,5 +1,14 @@
-; Copy this file to San9Toolkit.ini next to San9Toolkit.exe.
+; The GUI creates data\San9Toolkit.ini automatically.
 ; Omitted values use the original game's compiled defaults.
+
+[Toolkit]
+GameExecutable=
+DocumentsRoot=
+CursorLockVirtualKey=123
+ScaleInitialWindowForSystemDpi=1
+WindowTitle=三國志ⅨPK
+BorderlessWindow=0
+GameSpeedMultiplier=2
 
 [Configs]
 ; Toolkit rendering requires windowed mode. This is forced to 0 even when omitted.

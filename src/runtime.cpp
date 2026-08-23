@@ -6,6 +6,7 @@
 #include "d3d11_presenter.h"
 #include "import_hook.h"
 #include "registry_overlay.h"
+#include "toolkit_config.h"
 #include "viewport.h"
 
 #include <algorithm>
@@ -18,27 +19,12 @@ namespace {
 constexpr int kLogicalWidth = 1024;
 constexpr int kLogicalHeight = 768;
 constexpr char kWindowClass[] = "KOEI_SAN9WINDOW";
-constexpr wchar_t kWindowTitle[] = L"三國志ⅨPK";
 constexpr char kStatusProperty[] = "San9Toolkit.RuntimeStatus";
 constexpr wchar_t kBootEventEnvironmentVariable[] = L"SAN9_TOOLKIT_BOOT_EVENT";
 constexpr UINT kRedrawMessage = WM_APP + 0x319;
 constexpr std::uintptr_t kNormalizeWindowMessageRva = 0x1CC0B0;
 constexpr std::size_t kNormalizeWindowMessagePrologueSize = 8;
 constexpr UINT kDefaultDpi = 96;
-
-struct RuntimeOptions {
-    bool scaleInitialWindowForSystemDpi;
-    bool accelerateGameClock;
-    DWORD gameClockRate;
-};
-
-constexpr RuntimeOptions kRuntimeOptions{
-    .scaleInitialWindowForSystemDpi = true,
-    .accelerateGameClock = true,
-    .gameClockRate = 2,
-};
-
-static_assert(kRuntimeOptions.gameClockRate >= 1);
 
 using BitBltFunction = BOOL(WINAPI*)(HDC, int, int, int, int, HDC, int, int, DWORD);
 using GetCursorPosFunction = BOOL(WINAPI*)(LPPOINT);
@@ -60,6 +46,7 @@ SRWLOCK g_gameClockLock = SRWLOCK_INIT;
 bool g_gameClockInitialized = false;
 DWORD g_lastRealGameTick = 0;
 DWORD g_scaledGameTick = 0;
+san9::toolkit_config::Settings g_settings;
 
 using Viewport = san9::viewport::Bounds;
 
@@ -99,10 +86,10 @@ bool CalculateInitialOuterRect(HWND window, LONG_PTR style, LONG_PTR exStyle,
     if (dpi == 0) {
         return false;
     }
-    const int clientWidth = kRuntimeOptions.scaleInitialWindowForSystemDpi
+    const int clientWidth = g_settings.scaleInitialWindowForSystemDpi
                                 ? MulDiv(kLogicalWidth, static_cast<int>(dpi), kDefaultDpi)
                                 : kLogicalWidth;
-    const int clientHeight = kRuntimeOptions.scaleInitialWindowForSystemDpi
+    const int clientHeight = g_settings.scaleInitialWindowForSystemDpi
                                  ? MulDiv(kLogicalHeight, static_cast<int>(dpi), kDefaultDpi)
                                  : kLogicalHeight;
     outer = {0, 0, clientWidth, clientHeight};
@@ -329,7 +316,7 @@ DWORD WINAPI ScaledTimeGetTime() {
     } else {
         const DWORD elapsed = realTick - g_lastRealGameTick;
         g_lastRealGameTick = realTick;
-        g_scaledGameTick += elapsed * kRuntimeOptions.gameClockRate;
+        g_scaledGameTick += elapsed * g_settings.gameSpeedMultiplier;
     }
     const DWORD result = g_scaledGameTick;
     ReleaseSRWLockExclusive(&g_gameClockLock);
@@ -337,7 +324,7 @@ DWORD WINAPI ScaledTimeGetTime() {
 }
 
 bool InstallGameClock() {
-    return !kRuntimeOptions.accelerateGameClock ||
+    return g_settings.gameSpeedMultiplier == 1 ||
            san9::import_hook::Install("winmm.dll", "timeGetTime", &ScaledTimeGetTime,
                                       g_originalTimeGetTime);
 }
@@ -388,6 +375,17 @@ bool SignalBootReady() {
     return signaled;
 }
 
+bool LoadSettings() {
+    std::array<wchar_t, 32768> path{};
+    const DWORD length = GetEnvironmentVariableW(
+        L"SAN9_TOOLKIT_CONFIG", path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) {
+        return false;
+    }
+    g_settings = san9::toolkit_config::Load(path.data());
+    return true;
+}
+
 bool InstallWindowBehavior(HWND window) {
     RECT outer{};
     if (!GetWindowRect(window, &outer)) {
@@ -396,7 +394,9 @@ bool InstallWindowBehavior(HWND window) {
 
     const LONG_PTR oldStyle = GetWindowLongPtrA(window, GWL_STYLE);
     const LONG_PTR exStyle = GetWindowLongPtrA(window, GWL_EXSTYLE);
-    const LONG_PTR newStyle = (oldStyle & ~static_cast<LONG_PTR>(WS_POPUP)) | WS_OVERLAPPEDWINDOW;
+    const LONG_PTR newStyle = g_settings.borderlessWindow
+                                  ? ((oldStyle & ~static_cast<LONG_PTR>(WS_OVERLAPPEDWINDOW)) | WS_POPUP)
+                                  : ((oldStyle & ~static_cast<LONG_PTR>(WS_POPUP)) | WS_OVERLAPPEDWINDOW);
     SetLastError(ERROR_SUCCESS);
     if (SetWindowLongPtrA(window, GWL_STYLE, newStyle) == 0 && GetLastError() != ERROR_SUCCESS) {
         return false;
@@ -415,18 +415,18 @@ bool InstallWindowBehavior(HWND window) {
     if (!g_originalWindowProc) {
         return false;
     }
-    if (!SetWindowTextW(window, kWindowTitle)) {
+    if (!SetWindowTextW(window, g_settings.windowTitle.c_str())) {
         return false;
     }
     if (!san9::d3d11_presenter::Initialize(window)) {
         return false;
     }
-    san9::cursor_lock::Initialize(window);
+    san9::cursor_lock::Initialize(window, g_settings.cursorLockVirtualKey);
     return true;
 }
 
 DWORD WINAPI InstallThread(void*) {
-    if (!PatchRequiredHooks()) {
+    if (!LoadSettings() || !PatchRequiredHooks()) {
         OutputDebugStringW(L"San9Toolkit: required hooks failed.\n");
         return 2;
     }
