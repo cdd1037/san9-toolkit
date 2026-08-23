@@ -11,7 +11,7 @@ jobs:
   windows-release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download Core UI fork SDK
         shell: pwsh
@@ -29,7 +29,7 @@ jobs:
         run: ./package.ps1 -CoreUiRoot $env:CORE_UI_ROOT
 
       - name: Upload player package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: San9Toolkit-windows
           path: |
