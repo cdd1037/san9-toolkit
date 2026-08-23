@@ -1,9 +1,17 @@
 # San9 Toolkit
 
-这是一个面向《三国志 IX》的本地辅助工具仓库。当前仅支持 `SRC-SAN9PK-TC-101`：
+这是一个面向《三国志 IX》的现代化本地工具箱。当前仅支持繁体中文版威力加强版 1.0.1.0：
 由 x64 Core UI 图形主程序管理配置，再通过内部 x86 Bootstrap 挂起目标进程、注入 Runtime DLL，为原版窗口提供等比缩放和
 进程内用户配置。仓库后续可以加入其他相互独立的辅助功能，不以窗口缩放作为项目边界。
-逆向依据与验证结果保存在上级研究仓库的 `RE-SAN9PK-0062` 与 `RE-SAN9PK-0065`。
+
+## 下载
+
+普通玩家请从 [GitHub Releases](https://github.com/cdd1037/san9-toolkit/releases/latest) 下载
+`San9Toolkit-*-windows.zip`，完整解压后运行 `San9Toolkit.exe`。不要只取出主程序；
+`bin` 和 `ui` 目录也是运行所必需的。工具箱不包含游戏本体、影片、存档或其他原版资源。
+
+系统要求为 Windows 10/11 x64。当前只接受下列目标程序，其他版本会在启动前被拒绝，
+不会修改原版 EXE。
 
 ## 已知目标版本
 
@@ -19,7 +27,7 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。GUI 可配置初始 D
 固定尺寸无边框、鼠标锁定键以及 1x～4x 虚拟游戏时钟。加速不读取或改写注册表
 `GameSpeed`。
 
-## 原型边界
+## 功能与边界
 
 - 游戏内部仍使用固定的 1024×768 逻辑画布和原有 16 位 DIB 后缓冲。
 - 窗口标题使用原 EXE `0x604D64` 处 Big5 字节串的 Unicode 解码结果
@@ -72,10 +80,21 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。GUI 可配置初始 D
 
 ## 构建
 
-在 PowerShell 中运行：
+GUI 依赖 [cdd1037/core-ui](https://github.com/cdd1037/core-ui) fork 的
+[`v1.7.0-cdd.1`](https://github.com/cdd1037/core-ui/releases/tag/v1.7.0-cdd.1)，不是上游
+Core UI 的官方构建。下载该版本的 Windows x64 SDK 后，可将 `core-ui-v1.7.0` 放在本仓库
+同级目录，或通过参数明确指定 SDK 路径。构建需要安装带 C++ 桌面工具链的 Visual Studio
+和 Windows 10 SDK。
 
 ```powershell
 ./build.ps1
+./build.ps1 -CoreUiRoot C:\SDK\core-ui-v1.7.0
+```
+
+生成可发布 ZIP 和 SHA-256 校验文件：
+
+```powershell
+./package.ps1 -CoreUiRoot C:\SDK\core-ui-v1.7.0
 ```
 
 图形程序使用 x64，Bootstrap 和 Runtime 使用 Win32。发布根目录只有用户入口
@@ -163,3 +182,9 @@ Toolkit 写入。位置、`ArtData` 和剧情进度不作为用户开关，示�
 - 关闭游戏即可卸载所有进程内修改；Runtime 从 Toolkit 发布目录直接加载。
 - 注入或恢复主线程失败时，启动器会终止它刚创建且仍处于挂起状态的进程。
 - 不要把生成的 EXE 或 staging 文件提交到仓库。
+
+## 第三方组件
+
+发布包携带上述 fork 构建的 `core-ui.dll`。Core UI 及其内嵌组件的来源和许可证见
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。本仓库未声明项目自身的开放源代码
+许可证；第三方许可证只适用于各自组件。
