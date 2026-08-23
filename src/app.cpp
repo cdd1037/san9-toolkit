@@ -7,7 +7,6 @@
 
 #include "documents_path.h"
 #include "toolkit_config.h"
-#include "resources/resource.h"
 
 #include <array>
 #include <cstdint>
@@ -227,16 +226,7 @@ LRESULT CALLBACK WindowSubclass(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 }
 
 UiPage LoadLayout() {
-    const HMODULE module = GetModuleHandleW(nullptr);
-    const HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(IDR_APP_UIX), RT_RCDATA);
-    if (!resource) return 0;
-    const HGLOBAL loaded = LoadResource(module, resource);
-    const DWORD size = SizeofResource(module, resource);
-    const void* bytes = loaded ? LockResource(loaded) : nullptr;
-    if (!bytes || size == 0) return 0;
-    std::string source(static_cast<const char*>(bytes), size);
-    source.push_back('\0');
-    return ui_page_load_string(source.c_str());
+    return ui_page_load_file((g_app.root / L"ui" / L"app.uix").c_str());
 }
 
 UiWidget Widget(const char* id) {

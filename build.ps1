@@ -24,10 +24,13 @@ if ($LASTEXITCODE -ne 0) { throw 'GUI 构建失败。' }
 
 $binX86 = Join-Path $outputRoot 'bin\x86'
 $binX64 = Join-Path $outputRoot 'bin\x64'
+$uiRoot = Join-Path $outputRoot 'ui'
 [IO.Directory]::CreateDirectory($binX86) | Out-Null
 [IO.Directory]::CreateDirectory($binX64) | Out-Null
+[IO.Directory]::CreateDirectory($uiRoot) | Out-Null
 Copy-Item -LiteralPath (Join-Path $stagingX64 'San9Toolkit.exe') -Destination (Join-Path $outputRoot 'San9Toolkit.exe') -Force
 Copy-Item -LiteralPath (Join-Path $stagingX86 'San9Toolkit.Bootstrap.exe') -Destination $binX86 -Force
 Copy-Item -LiteralPath (Join-Path $stagingX86 'San9Toolkit.Runtime.dll') -Destination $binX86 -Force
 Copy-Item -LiteralPath (Join-Path $toolkitRoot '..\core-ui-v1.7.0\lib\dynamic\core-ui.dll') -Destination $binX64 -Force
+Copy-Item -LiteralPath (Join-Path $toolkitRoot 'src\ui\app.uix') -Destination $uiRoot -Force
 Write-Host "构建完成：$outputRoot（根目录仅保留 San9Toolkit.exe）"

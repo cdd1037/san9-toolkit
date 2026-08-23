@@ -80,8 +80,9 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。GUI 可配置初始 D
 
 图形程序使用 x64，Bootstrap 和 Runtime 使用 Win32。发布根目录只有用户入口
 `San9Toolkit.exe`；`core-ui.dll` 位于 `bin\x64`，无窗口 Bootstrap 和 Runtime 位于
-`bin\x86`。界面结构和样式由 `src\ui\app.uix` 定义，构建时作为 Windows 资源嵌入主程序；
-不再内嵌、释放或缓存 Runtime DLL。
+`bin\x86`。界面结构和样式由发布目录中的 `ui\app.uix` 定义，程序启动时直接读取该文件；
+修改 UIX 后无需重新编译。缺少或无法解析 UIX 时程序会明确启动失败，不使用内嵌回退。
+Runtime DLL 同样不内嵌、不释放也不缓存。
 
 ## 使用
 
