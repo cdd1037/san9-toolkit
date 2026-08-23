@@ -1,0 +1,621 @@
+#include "movie_player.h"
+#include "movie_state.h"
+
+#include "cursor_lock.h"
+#include "d3d11_presenter.h"
+#include "import_hook.h"
+#include "status_overlay.h"
+
+#include <mfapi.h>
+#include <mferror.h>
+#include <mfidl.h>
+#include <mfreadwrite.h>
+#include <wrl/client.h>
+#include <xaudio2.h>
+
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace san9::movie_player {
+namespace {
+
+using Microsoft::WRL::ComPtr;
+
+constexpr LONGLONG kHundredNanosecondsPerSecond =
+    movie_state::kHundredNanosecondsPerSecond;
+constexpr LONGLONG kAudioQueueDuration = 5'000'000;
+constexpr UINT32 kExpectedWidth = 640;
+constexpr UINT32 kExpectedHeight = 480;
+constexpr UINT32 kExpectedFrameRate = 30;
+constexpr UINT32 kExpectedSampleRate = 44'100;
+constexpr UINT32 kExpectedChannels = 2;
+
+using PlayFunction = int(__cdecl*)(HWND, const char*, int, int);
+using NoArgumentFunction = void(__cdecl*)();
+using QueryFunction = int(__cdecl*)();
+using SetVolumeFunction = void(__cdecl*)(int);
+using NotifyFunction = void(__cdecl*)(HWND, UINT, WPARAM, LPARAM);
+using SetMessageLoopFunction = void(__cdecl*)(void(__cdecl*)());
+
+PlayFunction g_oldPlay = nullptr;
+QueryFunction g_oldCheckFinish = nullptr;
+QueryFunction g_oldIsPlaying = nullptr;
+SetVolumeFunction g_oldSetVolume = nullptr;
+NoArgumentFunction g_oldPause = nullptr;
+NoArgumentFunction g_oldRestart = nullptr;
+NoArgumentFunction g_oldExit = nullptr;
+NotifyFunction g_oldNotify = nullptr;
+SetMessageLoopFunction g_oldSetMessageLoop = nullptr;
+
+movie_state::PlaybackState g_state;
+std::atomic_int g_volumeHundredthsDb{0};
+HWND g_owner = nullptr;
+void(__cdecl* g_messageLoop)() = nullptr;
+IXAudio2SourceVoice* g_activeVoice = nullptr;
+HHOOK g_messageHook = nullptr;
+
+struct VideoFrame {
+    LONGLONG timestamp = 0;
+    std::vector<std::uint8_t> pixels;
+};
+
+struct AudioPacket {
+    std::vector<std::uint8_t> bytes;
+};
+
+class VoiceCallback final : public IXAudio2VoiceCallback {
+public:
+    void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) override {}
+    void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() override {}
+    void STDMETHODCALLTYPE OnStreamEnd() override {}
+    void STDMETHODCALLTYPE OnBufferStart(void*) override {}
+    void STDMETHODCALLTYPE OnBufferEnd(void* context) override {
+        delete static_cast<AudioPacket*>(context);
+    }
+    void STDMETHODCALLTYPE OnLoopEnd(void*) override {}
+    void STDMETHODCALLTYPE OnVoiceError(void*, HRESULT error) override {
+        error_.store(error);
+    }
+
+    HRESULT Error() const { return error_.load(); }
+
+private:
+    std::atomic<HRESULT> error_{S_OK};
+};
+
+void TraceFailure(const wchar_t* stage, HRESULT error) {
+    wchar_t message[256]{};
+    swprintf_s(message, L"San9Toolkit movie: %s failed (HRESULT 0x%08X).\n",
+               stage, static_cast<unsigned int>(error));
+    OutputDebugStringW(message);
+}
+
+HRESULT ValidateAviSignature(const wchar_t* path) {
+    const HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    std::uint8_t header[12]{};
+    DWORD read = 0;
+    const bool validRead = ReadFile(file, header, sizeof(header), &read, nullptr) != FALSE;
+    CloseHandle(file);
+    if (!validRead) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    if (read != sizeof(header) || std::memcmp(header, "RIFF", 4) != 0 ||
+        std::memcmp(header + 8, "AVI ", 4) != 0) {
+        return MF_E_INVALID_FILE_FORMAT;
+    }
+    return S_OK;
+}
+
+HRESULT ValidateNativeStreams(IMFSourceReader* reader, DWORD& videoStream, DWORD& audioStream) {
+    ComPtr<IMFMediaType> video;
+    ComPtr<IMFMediaType> audio;
+    GUID major{};
+    GUID subtype{};
+    for (DWORD stream = 0; stream < 32; ++stream) {
+        ComPtr<IMFMediaType> candidate;
+        const HRESULT candidateResult = reader->GetNativeMediaType(stream, 0, &candidate);
+        if (candidateResult == MF_E_INVALIDSTREAMNUMBER) break;
+        if (FAILED(candidateResult)) continue;
+        GUID candidateMajor{};
+        if (FAILED(candidate->GetGUID(MF_MT_MAJOR_TYPE, &candidateMajor))) continue;
+        if (candidateMajor == MFMediaType_Video && !video) {
+            videoStream = stream;
+            video = candidate;
+        } else if (candidateMajor == MFMediaType_Audio && !audio) {
+            audioStream = stream;
+            audio = candidate;
+        }
+    }
+    if (!video || !audio) return MF_E_INVALIDMEDIATYPE;
+    HRESULT result = S_OK;
+    UINT32 width = 0;
+    UINT32 height = 0;
+    UINT32 numerator = 0;
+    UINT32 denominator = 0;
+    if (FAILED(result) || FAILED(video->GetGUID(MF_MT_MAJOR_TYPE, &major)) ||
+        FAILED(video->GetGUID(MF_MT_SUBTYPE, &subtype)) || major != MFMediaType_Video ||
+        subtype != MFVideoFormat_WMV3 ||
+        FAILED(MFGetAttributeSize(video.Get(), MF_MT_FRAME_SIZE, &width, &height)) ||
+        FAILED(MFGetAttributeRatio(video.Get(), MF_MT_FRAME_RATE, &numerator, &denominator)) ||
+        width != kExpectedWidth || height != kExpectedHeight ||
+        numerator != kExpectedFrameRate || denominator != 1) {
+        return MF_E_INVALIDMEDIATYPE;
+    }
+
+    UINT32 sampleRate = 0;
+    UINT32 channels = 0;
+    if (FAILED(result) || FAILED(audio->GetGUID(MF_MT_MAJOR_TYPE, &major)) ||
+        FAILED(audio->GetGUID(MF_MT_SUBTYPE, &subtype)) || major != MFMediaType_Audio ||
+        subtype != MFAudioFormat_MP3 ||
+        FAILED(audio->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &sampleRate)) ||
+        FAILED(audio->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels)) ||
+        sampleRate != kExpectedSampleRate || channels != kExpectedChannels) {
+        return MF_E_INVALIDMEDIATYPE;
+    }
+    return S_OK;
+}
+
+HRESULT ConfigureOutputs(IMFSourceReader* reader, DWORD videoStream, DWORD audioStream) {
+    HRESULT result = reader->SetStreamSelection(
+        static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
+    if (SUCCEEDED(result)) {
+        result = reader->SetStreamSelection(videoStream, TRUE);
+    }
+    if (SUCCEEDED(result)) {
+        result = reader->SetStreamSelection(audioStream, TRUE);
+    }
+    ComPtr<IMFMediaType> video;
+    if (SUCCEEDED(result)) {
+        result = MFCreateMediaType(&video);
+    }
+    if (SUCCEEDED(result)) {
+        result = video->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    }
+    if (SUCCEEDED(result)) {
+        result = video->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+    }
+    if (SUCCEEDED(result)) {
+        result = reader->SetCurrentMediaType(videoStream, nullptr, video.Get());
+    }
+    ComPtr<IMFMediaType> audio;
+    if (SUCCEEDED(result)) {
+        result = MFCreateMediaType(&audio);
+    }
+    if (SUCCEEDED(result)) {
+        result = audio->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    }
+    if (SUCCEEDED(result)) {
+        result = audio->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+    }
+    if (SUCCEEDED(result)) {
+        result = audio->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+    }
+    if (SUCCEEDED(result)) {
+        result = audio->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, kExpectedSampleRate);
+    }
+    if (SUCCEEDED(result)) {
+        result = audio->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, kExpectedChannels);
+    }
+    if (SUCCEEDED(result)) {
+        result = audio->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT,
+                                  kExpectedChannels * sizeof(std::int16_t));
+    }
+    if (SUCCEEDED(result)) {
+        result = audio->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
+                                  kExpectedSampleRate * kExpectedChannels *
+                                      sizeof(std::int16_t));
+    }
+    if (SUCCEEDED(result)) {
+        result = reader->SetCurrentMediaType(audioStream, nullptr, audio.Get());
+    }
+    return result;
+}
+
+HRESULT CopyVideoFrame(IMFSample* sample, LONGLONG timestamp, VideoFrame& frame) {
+    ComPtr<IMFMediaBuffer> buffer;
+    HRESULT result = sample->ConvertToContiguousBuffer(&buffer);
+    if (FAILED(result)) {
+        return result;
+    }
+    ComPtr<IMF2DBuffer> buffer2d;
+    result = buffer.As(&buffer2d);
+    if (FAILED(result)) {
+        return result;
+    }
+    BYTE* scanline = nullptr;
+    LONG pitch = 0;
+    result = buffer2d->Lock2D(&scanline, &pitch);
+    if (FAILED(result)) {
+        return result;
+    }
+    frame.timestamp = timestamp;
+    frame.pixels.resize(static_cast<std::size_t>(kExpectedWidth) * kExpectedHeight * 4);
+    for (UINT32 y = 0; y < kExpectedHeight; ++y) {
+        std::memcpy(frame.pixels.data() + static_cast<std::size_t>(y) * kExpectedWidth * 4,
+                    scanline + static_cast<ptrdiff_t>(y) * pitch,
+                    static_cast<std::size_t>(kExpectedWidth) * 4);
+    }
+    buffer2d->Unlock2D();
+    return S_OK;
+}
+
+HRESULT SubmitAudio(IMFSample* sample, IXAudio2SourceVoice* voice, LONGLONG& durationQueued) {
+    ComPtr<IMFMediaBuffer> buffer;
+    HRESULT result = sample->ConvertToContiguousBuffer(&buffer);
+    if (FAILED(result)) {
+        return result;
+    }
+    BYTE* data = nullptr;
+    DWORD length = 0;
+    result = buffer->Lock(&data, nullptr, &length);
+    if (FAILED(result)) {
+        return result;
+    }
+    auto packet = std::make_unique<AudioPacket>();
+    packet->bytes.assign(data, data + length);
+    buffer->Unlock();
+    XAUDIO2_BUFFER xaudioBuffer{};
+    xaudioBuffer.AudioBytes = length;
+    xaudioBuffer.pAudioData = packet->bytes.data();
+    xaudioBuffer.pContext = packet.get();
+    result = voice->SubmitSourceBuffer(&xaudioBuffer);
+    if (SUCCEEDED(result)) {
+        packet.release();
+        durationQueued += static_cast<LONGLONG>(length) * kHundredNanosecondsPerSecond /
+                          (kExpectedSampleRate * kExpectedChannels * sizeof(std::int16_t));
+    }
+    return result;
+}
+
+void ApplyPauseState(IXAudio2SourceVoice* voice) {
+    if (!voice) {
+        return;
+    }
+    if (g_state.IsPaused()) {
+        voice->Stop(0);
+    } else {
+        voice->Start(0);
+    }
+}
+
+void PumpMessages() {
+    MSG message{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+        const bool skip = message.hwnd == g_owner &&
+                          (message.message == WM_LBUTTONUP ||
+                           (message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE));
+        if (skip) {
+            g_state.RequestStop();
+            continue;
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    if (g_messageLoop) {
+        g_messageLoop();
+    }
+}
+
+LRESULT CALLBACK MovieGetMessageHook(int code, WPARAM wParam, LPARAM lParam) {
+    if (code >= 0 && wParam == PM_REMOVE) {
+        auto* message = reinterpret_cast<MSG*>(lParam);
+        if (message && message->hwnd == g_owner &&
+            (message->message == WM_LBUTTONUP ||
+             (message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE))) {
+            g_state.RequestStop();
+            message->message = WM_NULL;
+        }
+    }
+    return CallNextHookEx(g_messageHook, code, wParam, lParam);
+}
+
+HRESULT RunPlayback(HWND owner, const wchar_t* path) {
+    HRESULT result = ValidateAviSignature(path);
+    const wchar_t* stage = L"AVI signature validation";
+    if (FAILED(result)) {
+        TraceFailure(stage, result);
+        return result;
+    }
+
+    const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool uninitializeCom = SUCCEEDED(comResult);
+    if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
+        TraceFailure(L"COM initialization", comResult);
+        return comResult;
+    }
+    result = MFStartup(MF_VERSION, MFSTARTUP_FULL);
+    if (FAILED(result)) {
+        TraceFailure(L"Media Foundation startup", result);
+        if (uninitializeCom) CoUninitialize();
+        return result;
+    }
+
+    ComPtr<IMFByteStream> byteStream;
+    stage = L"byte stream creation";
+    result = MFCreateFile(MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST,
+                          MF_FILEFLAGS_NONE, path, &byteStream);
+    ComPtr<IMFAttributes> streamAttributes;
+    if (SUCCEEDED(result)) {
+        result = byteStream.As(&streamAttributes);
+    }
+    if (SUCCEEDED(result)) {
+        result = streamAttributes->SetString(MF_BYTESTREAM_CONTENT_TYPE, L"video/avi");
+    }
+    ComPtr<IMFSourceReader> reader;
+    if (SUCCEEDED(result)) {
+        ComPtr<IMFAttributes> readerAttributes;
+        result = MFCreateAttributes(&readerAttributes, 1);
+        if (SUCCEEDED(result)) {
+            result = readerAttributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+        }
+        stage = L"AVI source reader creation";
+        if (SUCCEEDED(result)) {
+            result = MFCreateSourceReaderFromByteStream(byteStream.Get(), readerAttributes.Get(),
+                                                        &reader);
+        }
+    }
+    DWORD videoStream = 0;
+    DWORD audioStream = 0;
+    if (SUCCEEDED(result)) {
+        stage = L"native stream validation";
+        result = ValidateNativeStreams(reader.Get(), videoStream, audioStream);
+    }
+    if (SUCCEEDED(result)) {
+        stage = L"decoder output configuration";
+        result = ConfigureOutputs(reader.Get(), videoStream, audioStream);
+    }
+
+    ComPtr<IXAudio2> xaudio;
+    IXAudio2MasteringVoice* masteringVoice = nullptr;
+    IXAudio2SourceVoice* sourceVoice = nullptr;
+    VoiceCallback voiceCallback;
+    if (SUCCEEDED(result)) {
+        stage = L"XAudio2 creation";
+        result = XAudio2Create(&xaudio, 0, XAUDIO2_DEFAULT_PROCESSOR);
+    }
+    if (SUCCEEDED(result)) {
+        result = xaudio->CreateMasteringVoice(&masteringVoice, kExpectedChannels,
+                                               kExpectedSampleRate);
+    }
+    WAVEFORMATEX waveFormat{};
+    waveFormat.wFormatTag = WAVE_FORMAT_PCM;
+    waveFormat.nChannels = kExpectedChannels;
+    waveFormat.nSamplesPerSec = kExpectedSampleRate;
+    waveFormat.wBitsPerSample = 16;
+    waveFormat.nBlockAlign = waveFormat.nChannels * waveFormat.wBitsPerSample / 8;
+    waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
+    if (SUCCEEDED(result)) {
+        result = xaudio->CreateSourceVoice(&sourceVoice, &waveFormat, 0,
+                                           XAUDIO2_DEFAULT_FREQ_RATIO, &voiceCallback);
+    }
+    if (SUCCEEDED(result)) {
+        sourceVoice->SetVolume(std::pow(10.0F, g_volumeHundredthsDb.load() / 2000.0F));
+        if (!d3d11_presenter::BeginMovie(owner, kExpectedWidth, kExpectedHeight)) {
+            result = E_FAIL;
+            stage = L"D3D11 movie mode";
+        }
+    }
+
+    std::deque<VideoFrame> frames;
+    LONGLONG audioQueued = 0;
+    LONGLONG audioStartTimestamp = -1;
+    bool videoEnded = false;
+    bool audioEnded = false;
+    bool started = false;
+    while (SUCCEEDED(result) && !g_state.IsStopRequested()) {
+        PumpMessages();
+        if (g_state.IsPaused()) {
+            Sleep(10);
+            continue;
+        }
+
+        XAUDIO2_VOICE_STATE voiceState{};
+        if (sourceVoice) {
+            sourceVoice->GetState(&voiceState);
+        }
+        const LONGLONG played = static_cast<LONGLONG>(voiceState.SamplesPlayed) *
+                               kHundredNanosecondsPerSecond / kExpectedSampleRate;
+        const LONGLONG buffered = std::max<LONGLONG>(0, audioQueued - played);
+        const bool needData = !videoEnded || (!audioEnded && buffered < kAudioQueueDuration);
+        if (needData && (!started || frames.size() < 8)) {
+            DWORD actualStream = 0;
+            DWORD flags = 0;
+            LONGLONG timestamp = 0;
+            ComPtr<IMFSample> sample;
+            stage = L"sample decoding";
+            result = reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_ANY_STREAM), 0,
+                                        &actualStream,
+                                        &flags, &timestamp, &sample);
+            if (FAILED(result)) break;
+            if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
+                if (actualStream == videoStream) videoEnded = true;
+                if (actualStream == audioStream) audioEnded = true;
+                if (actualStream != videoStream && actualStream != audioStream) {
+                    videoEnded = true;
+                    audioEnded = true;
+                }
+            }
+            if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0) {
+                result = MF_E_TRANSFORM_STREAM_CHANGE;
+                stage = L"unexpected media type change";
+                break;
+            }
+            if (sample && actualStream == videoStream) {
+                VideoFrame frame;
+                result = CopyVideoFrame(sample.Get(), timestamp, frame);
+                if (SUCCEEDED(result)) frames.push_back(std::move(frame));
+            } else if (sample && actualStream == audioStream) {
+                if (audioStartTimestamp < 0) audioStartTimestamp = timestamp;
+                result = SubmitAudio(sample.Get(), sourceVoice, audioQueued);
+            }
+        }
+
+        if (!started && movie_state::ReadyToStart(!frames.empty(), audioQueued, audioEnded)) {
+            result = sourceVoice->Start(0);
+            if (SUCCEEDED(result)) {
+                started = true;
+                g_activeVoice = sourceVoice;
+            }
+        }
+        if (!started && videoEnded && audioEnded) {
+            result = MF_E_END_OF_STREAM;
+            stage = L"media prebuffer";
+            break;
+        }
+        if (started) {
+            sourceVoice->GetState(&voiceState);
+            const LONGLONG clock = audioStartTimestamp +
+                                   static_cast<LONGLONG>(voiceState.SamplesPlayed) *
+                                       kHundredNanosecondsPerSecond / kExpectedSampleRate;
+            std::vector<std::int64_t> timestamps;
+            timestamps.reserve(frames.size());
+            for (const VideoFrame& frame : frames) timestamps.push_back(frame.timestamp);
+            std::size_t dropCount = movie_state::LateFramesToDrop(timestamps, clock);
+            while (dropCount-- > 0) frames.pop_front();
+            if (!frames.empty() &&
+                frames.front().timestamp <= clock + movie_state::kLateFrameThreshold / 2) {
+                const VideoFrame& frame = frames.front();
+                if (!d3d11_presenter::PresentMovieFrame(frame.pixels.data(), kExpectedWidth * 4)) {
+                    result = E_FAIL;
+                    stage = L"movie frame presentation";
+                    break;
+                }
+                frames.pop_front();
+            }
+            if (movie_state::PlaybackComplete(videoEnded, audioEnded, frames.size(),
+                                              voiceState.BuffersQueued)) {
+                break;
+            }
+        }
+        if (FAILED(voiceCallback.Error())) {
+            result = voiceCallback.Error();
+            stage = L"XAudio2 voice";
+            break;
+        }
+        Sleep(1);
+    }
+
+    g_activeVoice = nullptr;
+    if (sourceVoice) {
+        sourceVoice->Stop(0);
+        sourceVoice->FlushSourceBuffers();
+        sourceVoice->DestroyVoice();
+    }
+    if (masteringVoice) masteringVoice->DestroyVoice();
+    d3d11_presenter::EndMovie();
+    MFShutdown();
+    if (uninitializeCom) CoUninitialize();
+    if (FAILED(result)) TraceFailure(stage, result);
+    return result;
+}
+
+int __cdecl ModernPlay(HWND owner, const char* path, int, int) {
+    if (!owner || !path || !g_state.Begin()) {
+        return 0;
+    }
+    g_owner = owner;
+    g_state.PauseByWindow(IsIconic(owner) != FALSE || GetForegroundWindow() != owner);
+    cursor_lock::Suspend();
+    status_overlay::Hide();
+    g_messageHook = SetWindowsHookExW(WH_GETMESSAGE, &MovieGetMessageHook, nullptr,
+                                      GetCurrentThreadId());
+
+    std::wstring widePath;
+    const int required = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, path, -1,
+                                              nullptr, 0);
+    HRESULT result = E_INVALIDARG;
+    if (required > 0) {
+        widePath.resize(static_cast<std::size_t>(required));
+        MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, path, -1,
+                            widePath.data(), required);
+        result = RunPlayback(owner, widePath.c_str());
+    }
+
+    if (g_messageHook) {
+        UnhookWindowsHookEx(g_messageHook);
+        g_messageHook = nullptr;
+    }
+
+    cursor_lock::Resume();
+    g_owner = nullptr;
+    g_state.Finish();
+    if (FAILED(result)) {
+        status_overlay::ShowMessage(owner, L"影片无法播放，已跳过");
+    }
+    return SUCCEEDED(result) ? 1 : 0;
+}
+
+int __cdecl ModernCheckFinish() { return g_state.IsFinished() ? 1 : 0; }
+int __cdecl ModernIsPlaying() { return g_state.IsPlaying() ? 1 : 0; }
+void __cdecl ModernSetVolume(int volume) {
+    volume = std::clamp(volume, -10'000, 0);
+    g_volumeHundredthsDb.store(volume);
+    if (g_activeVoice) g_activeVoice->SetVolume(std::pow(10.0F, volume / 2000.0F));
+}
+void __cdecl ModernPause() { g_state.PauseByApi(true); ApplyPauseState(g_activeVoice); }
+void __cdecl ModernRestart() { g_state.PauseByApi(false); ApplyPauseState(g_activeVoice); }
+void __cdecl ModernExit() { g_state.RequestStop(); }
+void __cdecl ModernNotify(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    HandleWindowMessage(window, message, wParam, lParam);
+}
+void __cdecl ModernSetMessageLoop(void(__cdecl* callback)()) { g_messageLoop = callback; }
+
+} // namespace
+
+bool Install() {
+    return import_hook::Install("koeimpeg.dll", "MPEGMoviePlay", &ModernPlay, g_oldPlay) &&
+           import_hook::Install("koeimpeg.dll", "MPEGMovieCheckFinish", &ModernCheckFinish,
+                                g_oldCheckFinish) &&
+           import_hook::Install("koeimpeg.dll", "MPEGMovieIsPlaying", &ModernIsPlaying,
+                                g_oldIsPlaying) &&
+           import_hook::Install("koeimpeg.dll", "MPEGMovieSetSoundVolume", &ModernSetVolume,
+                                g_oldSetVolume) &&
+           import_hook::Install("koeimpeg.dll", "MPEGMoviePause", &ModernPause, g_oldPause) &&
+           import_hook::Install("koeimpeg.dll", "MPEGMovieReStart", &ModernRestart, g_oldRestart) &&
+           import_hook::Install("koeimpeg.dll", "MPEGMovieExit", &ModernExit, g_oldExit) &&
+           import_hook::Install("koeimpeg.dll", "MPEGMovieNotifyOwnerMessage", &ModernNotify,
+                                g_oldNotify) &&
+           import_hook::Install("koeimpeg.dll", "MPEGMovieSetSan9MsgLoop", &ModernSetMessageLoop,
+                                g_oldSetMessageLoop);
+}
+
+bool HandleWindowMessage(HWND window, UINT message, WPARAM wParam, LPARAM) {
+    if (!g_state.IsPlaying() || window != g_owner) return false;
+    if (message == WM_CLOSE || message == WM_DESTROY || message == WM_NCDESTROY) {
+        g_state.RequestStop();
+        return false;
+    }
+    if (message == WM_ACTIVATE) {
+        g_state.PauseByWindow(LOWORD(wParam) == WA_INACTIVE);
+        ApplyPauseState(g_activeVoice);
+    } else if (message == WM_ACTIVATEAPP) {
+        g_state.PauseByWindow(wParam == FALSE);
+        ApplyPauseState(g_activeVoice);
+    } else if (message == WM_SIZE) {
+        g_state.PauseByWindow(wParam == SIZE_MINIMIZED);
+        ApplyPauseState(g_activeVoice);
+    }
+    if (message == WM_PAINT || message == WM_SIZE) {
+        d3d11_presenter::PresentCurrentFrame();
+    }
+    return false;
+}
+
+void Shutdown() {
+    g_state.RequestStop();
+}
+
+} // namespace san9::movie_player

@@ -13,6 +13,7 @@ volatile LONG g_clipApplied = 0;
 volatile LONG g_windowActive = 0;
 volatile LONG g_applicationActive = 0;
 volatile LONG g_windowMovingOrSizing = 0;
+volatile LONG g_suspended = 0;
 
 bool IsFlagSet(volatile LONG& flag) {
     return InterlockedCompareExchange(&flag, 0, 0) != 0;
@@ -29,6 +30,7 @@ void Refresh(HWND window) {
                              IsFlagSet(g_enabled) &&
                              IsFlagSet(g_windowActive) &&
                              IsFlagSet(g_applicationActive) &&
+                             !IsFlagSet(g_suspended) &&
                              !IsFlagSet(g_windowMovingOrSizing) &&
                              !IsIconic(window);
     if (!shouldApply) {
@@ -116,6 +118,19 @@ void Initialize(HWND window, UINT toggleKey) {
     InterlockedExchange(&g_applicationActive, active ? 1 : 0);
 }
 
+void Suspend() {
+    InterlockedExchange(&g_suspended, 1);
+    ReleaseClip();
+    status_overlay::Hide();
+}
+
+void Resume() {
+    InterlockedExchange(&g_suspended, 0);
+    if (g_window) {
+        Refresh(g_window);
+    }
+}
+
 bool HandleInputMessage(HWND window, MSG& message) {
     HandleLifecycleBefore(message.message, message.wParam);
     HandleLifecycleAfter(window, message.message);
@@ -144,6 +159,7 @@ void HandleWindowMessageAfter(HWND window, UINT message) {
 
 void Shutdown() {
     InterlockedExchange(&g_enabled, 0);
+    InterlockedExchange(&g_suspended, 0);
     ReleaseClip();
     status_overlay::Shutdown();
     g_window = nullptr;

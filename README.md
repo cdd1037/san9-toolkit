@@ -84,6 +84,10 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。GUI 可配置初始 D
 修改 UIX 后无需重新编译。缺少或无法解析 UIX 时程序会明确启动失败，不使用内嵌回退。
 Runtime DLL 同样不内嵌、不释放也不缓存。
 
+构建会先运行影片播放器的状态与时序单元测试。若需对本机原作影片做只读的 Media
+Foundation 全量解码验证，可构建 `San9Toolkit.MovieProbe.vcxproj`，再把影片目录作为唯一
+参数传给生成的 `San9Toolkit.MovieProbe.exe`；探针不复制或修改影片。
+
 ## 使用
 
 保持发布包目录结构，直接运行：
@@ -128,6 +132,11 @@ FullScreen=0
 `2=暫停`；`GameReport` 对应界面“進行記錄”，为 `0=OFF`、`1=要約`、`2=詳細`。
 当前目标版本只加载、范围夹取和保存 `GameSpeed`，未发现运行时消费者；Toolkit 的 2×
 虚拟时钟不读取该项。`GameReportDlg` 和 `JumpList` 的三档标签仍待确认。
+
+影片播放由 Toolkit 在游戏窗口内完成：Media Foundation 解码原作实际为 AVI 的
+WMV3/MP3 文件，XAudio2 提供独立于游戏倍率的音频主时钟，画面复用游戏现有 D3D11
+交换链。播放期间左键释放或 Esc 可跳过；失焦、最小化时暂停。格式或解码失败会恢复游戏
+画面并提示“影片无法播放，已跳过”，不会回退到旧式影片窗口。
 
 已确认的 `Configs` 唯一键名共 22 个：
 

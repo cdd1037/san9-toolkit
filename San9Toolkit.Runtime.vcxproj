@@ -20,13 +20,14 @@
   <PropertyGroup><IntDir>$(SolutionDir)build\obj\$(ProjectName)\$(Configuration)\</IntDir></PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><LanguageStandard>stdcpp20</LanguageStandard><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
-    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>d3d11.lib;d3dcompiler.lib;dxgi.lib;gdi32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>d3d11.lib;d3dcompiler.lib;dxgi.lib;gdi32.lib;user32.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;xaudio2.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\code_hook.cpp" />
     <ClCompile Include="src\cursor_lock.cpp" />
     <ClCompile Include="src\d3d11_presenter.cpp" />
     <ClCompile Include="src\documents_overlay.cpp" />
+    <ClCompile Include="src\movie_player.cpp" />
     <ClCompile Include="src\registry_overlay.cpp" />
     <ClCompile Include="src\runtime.cpp" />
     <ClCompile Include="src\status_overlay.cpp" />
@@ -39,6 +40,8 @@
     <ClInclude Include="src\documents_overlay.h" />
     <ClInclude Include="src\documents_path.h" />
     <ClInclude Include="src\import_hook.h" />
+    <ClInclude Include="src\movie_player.h" />
+    <ClInclude Include="src\movie_state.h" />
     <ClInclude Include="src\registry_overlay.h" />
     <ClInclude Include="src\status_overlay.h" />
     <ClInclude Include="src\toolkit_config.h" />

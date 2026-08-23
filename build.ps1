@@ -15,6 +15,10 @@ $stagingX86 = Join-Path $toolkitRoot "build\staging\$Configuration\x86"
 $stagingX64 = Join-Path $toolkitRoot "build\staging\$Configuration\x64"
 $outputRoot = Join-Path $toolkitRoot "dist\$Configuration"
 
+& $msbuild (Join-Path $toolkitRoot 'San9Toolkit.Tests.vcxproj') /m /t:Build "/p:Configuration=$Configuration" /p:Platform=Win32
+if ($LASTEXITCODE -ne 0) { throw '测试构建失败。' }
+& (Join-Path $toolkitRoot "build\tests\$Configuration\San9Toolkit.Tests.exe")
+if ($LASTEXITCODE -ne 0) { throw '播放器状态与时序测试失败。' }
 & $msbuild (Join-Path $toolkitRoot 'San9Toolkit.Runtime.vcxproj') /m /t:Build "/p:Configuration=$Configuration" /p:Platform=Win32 "/p:OutDir=$stagingX86\"
 if ($LASTEXITCODE -ne 0) { throw 'Runtime 构建失败。' }
 & $msbuild (Join-Path $toolkitRoot 'San9Toolkit.Launcher.vcxproj') /m /t:Build "/p:Configuration=$Configuration" /p:Platform=Win32 "/p:OutDir=$stagingX86\"

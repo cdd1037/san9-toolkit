@@ -25,6 +25,12 @@ constexpr DXGI_FORMAT kFrameTextureFormat = DXGI_FORMAT_B5G5R5A1_UNORM;
 constexpr char kShaderSource[] = R"(
 Texture2D frameTexture : register(t0);
 
+cbuffer FrameParameters : register(b0) {
+    float2 textureSize;
+    float flipVertical;
+    float padding;
+};
+
 struct VertexOutput {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
@@ -40,9 +46,10 @@ VertexOutput VertexMain(uint vertexId : SV_VertexID) {
 }
 
 float4 PixelMain(VertexOutput input) : SV_Target {
-    const float2 textureSize = float2(1024.0, 768.0);
+    const float2 sampleUv = float2(input.uv.x,
+        lerp(input.uv.y, 1.0 - input.uv.y, flipVertical));
     const float2 sourcePosition =
-        float2(input.uv.x, 1.0 - input.uv.y) * textureSize - 0.5;
+        sampleUv * textureSize - 0.5;
     const int2 basePosition = int2(floor(sourcePosition));
     const float2 fraction = frac(sourcePosition);
     const float2 fraction2 = fraction * fraction;
@@ -64,7 +71,7 @@ float4 PixelMain(VertexOutput input) : SV_Target {
         [unroll]
         for (int x = 0; x < 4; ++x) {
             const int2 samplePosition = clamp(
-                basePosition + int2(x - 1, y - 1), int2(0, 0), int2(1023, 767));
+                basePosition + int2(x - 1, y - 1), int2(0, 0), int2(textureSize) - 1);
             color += frameTexture.Load(int3(samplePosition, 0)).rgb *
                      weightsX[x] * weightsY[y];
         }
@@ -84,8 +91,22 @@ ComPtr<IDXGISwapChain> g_swapChain;
 ComPtr<ID3D11RenderTargetView> g_renderTarget;
 ComPtr<ID3D11Texture2D> g_frameTexture;
 ComPtr<ID3D11ShaderResourceView> g_frameView;
+ComPtr<ID3D11Texture2D> g_movieTexture;
+ComPtr<ID3D11ShaderResourceView> g_movieView;
+ComPtr<ID3D11Buffer> g_frameParameters;
 ComPtr<ID3D11VertexShader> g_vertexShader;
 ComPtr<ID3D11PixelShader> g_pixelShader;
+UINT g_movieWidth = 0;
+UINT g_movieHeight = 0;
+bool g_movieActive = false;
+bool g_movieFrameAvailable = false;
+
+struct FrameParameters {
+    float width;
+    float height;
+    float flipVertical;
+    float padding;
+};
 
 bool CompileShader(const char* entryPoint, const char* profile, ComPtr<ID3DBlob>& bytecode) {
     ComPtr<ID3DBlob> errors;
@@ -169,11 +190,33 @@ bool UploadFrame(const BITMAP& bitmap) {
     return true;
 }
 
-void DrawScaledFrame(const viewport::Bounds& bounds) {
+viewport::Bounds FitSourceToViewport(UINT width, UINT height) {
+    viewport::Bounds bounds = viewport::Calculate(g_window);
+    if (bounds.width <= 0 || bounds.height <= 0 || width == 0 || height == 0) {
+        return {};
+    }
+    const long long widthLimitedHeight =
+        static_cast<long long>(bounds.width) * height / width;
+    if (widthLimitedHeight <= bounds.height) {
+        const int fittedHeight = static_cast<int>(widthLimitedHeight);
+        bounds.y += (bounds.height - fittedHeight) / 2;
+        bounds.height = fittedHeight;
+    } else {
+        const int fittedWidth = static_cast<int>(
+            static_cast<long long>(bounds.height) * width / height);
+        bounds.x += (bounds.width - fittedWidth) / 2;
+        bounds.width = fittedWidth;
+    }
+    return bounds;
+}
+
+void DrawScaledFrame(ID3D11ShaderResourceView* view, UINT width, UINT height,
+                     bool flipVertical) {
     constexpr float clearColor[4]{0.0F, 0.0F, 0.0F, 1.0F};
     g_context->OMSetRenderTargets(1, g_renderTarget.GetAddressOf(), nullptr);
     g_context->ClearRenderTargetView(g_renderTarget.Get(), clearColor);
 
+    const viewport::Bounds bounds = FitSourceToViewport(width, height);
     D3D11_VIEWPORT graphicsViewport{};
     graphicsViewport.TopLeftX = static_cast<float>(bounds.x);
     graphicsViewport.TopLeftY = static_cast<float>(bounds.y);
@@ -186,7 +229,12 @@ void DrawScaledFrame(const viewport::Bounds& bounds) {
     g_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     g_context->VSSetShader(g_vertexShader.Get(), nullptr, 0);
     g_context->PSSetShader(g_pixelShader.Get(), nullptr, 0);
-    g_context->PSSetShaderResources(0, 1, g_frameView.GetAddressOf());
+    const FrameParameters parameters{static_cast<float>(width), static_cast<float>(height),
+                                     flipVertical ? 1.0F : 0.0F, 0.0F};
+    g_context->UpdateSubresource(g_frameParameters.Get(), 0, nullptr, &parameters, 0, 0);
+    ID3D11Buffer* constantBuffer = g_frameParameters.Get();
+    g_context->PSSetConstantBuffers(0, 1, &constantBuffer);
+    g_context->PSSetShaderResources(0, 1, &view);
     g_context->Draw(3, 0);
     ID3D11ShaderResourceView* noResource = nullptr;
     g_context->PSSetShaderResources(0, 1, &noResource);
@@ -278,6 +326,15 @@ bool Initialize(HWND window) {
         return false;
     }
 
+    D3D11_BUFFER_DESC parameterDescription{};
+    parameterDescription.ByteWidth = sizeof(FrameParameters);
+    parameterDescription.Usage = D3D11_USAGE_DEFAULT;
+    parameterDescription.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    if (FAILED(g_device->CreateBuffer(&parameterDescription, nullptr, &g_frameParameters))) {
+        Shutdown();
+        return false;
+    }
+
     if (!CreateRenderTarget(width, height)) {
         Shutdown();
         return false;
@@ -295,7 +352,7 @@ bool PresentNow(HDC framebufferDc) {
     if (!UploadFrame(bitmap)) {
         return false;
     }
-    DrawScaledFrame(viewport::Calculate(g_window));
+    DrawScaledFrame(g_frameView.Get(), kLogicalWidth, kLogicalHeight, true);
 
     const HRESULT presented = g_swapChain->Present(0, 0);
     if (presented == DXGI_ERROR_DEVICE_REMOVED || presented == DXGI_ERROR_DEVICE_RESET) {
@@ -321,7 +378,94 @@ bool PresentPendingFrame() {
     if (InterlockedExchange(&g_presentPending, 0) == 0) {
         return true;
     }
+    if (g_movieActive) {
+        return true;
+    }
     return PresentNow(g_pendingFramebufferDc);
+}
+
+bool BeginMovie(HWND window, UINT width, UINT height) {
+    if (!window || width == 0 || height == 0) {
+        return false;
+    }
+    if (!g_device || g_window != window) {
+        if (!Initialize(window)) {
+            return false;
+        }
+    }
+
+    D3D11_TEXTURE2D_DESC description{};
+    description.Width = width;
+    description.Height = height;
+    description.MipLevels = 1;
+    description.ArraySize = 1;
+    description.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    description.SampleDesc.Count = 1;
+    description.Usage = D3D11_USAGE_DYNAMIC;
+    description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    description.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    ComPtr<ID3D11Texture2D> texture;
+    ComPtr<ID3D11ShaderResourceView> view;
+    if (FAILED(g_device->CreateTexture2D(&description, nullptr, &texture)) ||
+        FAILED(g_device->CreateShaderResourceView(texture.Get(), nullptr, &view))) {
+        return false;
+    }
+    g_movieTexture = std::move(texture);
+    g_movieView = std::move(view);
+    g_movieWidth = width;
+    g_movieHeight = height;
+    g_movieFrameAvailable = false;
+    g_movieActive = true;
+    return true;
+}
+
+bool PresentMovieFrame(const void* pixels, UINT rowPitch) {
+    if (!g_movieActive || !g_movieTexture || !pixels ||
+        rowPitch < g_movieWidth * sizeof(std::uint32_t) || !EnsureRenderTarget()) {
+        return false;
+    }
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(g_context->Map(g_movieTexture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        return false;
+    }
+    const auto* source = static_cast<const std::uint8_t*>(pixels);
+    for (UINT y = 0; y < g_movieHeight; ++y) {
+        std::memcpy(static_cast<std::uint8_t*>(mapped.pData) + y * mapped.RowPitch,
+                    source + y * rowPitch,
+                    static_cast<std::size_t>(g_movieWidth) * sizeof(std::uint32_t));
+    }
+    g_context->Unmap(g_movieTexture.Get(), 0);
+    g_movieFrameAvailable = true;
+    DrawScaledFrame(g_movieView.Get(), g_movieWidth, g_movieHeight, false);
+    const HRESULT presented = g_swapChain->Present(0, 0);
+    return SUCCEEDED(presented);
+}
+
+bool PresentCurrentFrame() {
+    if (g_movieActive) {
+        if (!g_movieFrameAvailable || !EnsureRenderTarget()) {
+            return true;
+        }
+        DrawScaledFrame(g_movieView.Get(), g_movieWidth, g_movieHeight, false);
+        return SUCCEEDED(g_swapChain->Present(0, 0));
+    }
+    return !g_pendingFramebufferDc || PresentNow(g_pendingFramebufferDc);
+}
+
+void EndMovie() {
+    g_movieActive = false;
+    g_movieFrameAvailable = false;
+    g_movieWidth = 0;
+    g_movieHeight = 0;
+    g_movieView.Reset();
+    g_movieTexture.Reset();
+    if (g_pendingFramebufferDc) {
+        PresentNow(g_pendingFramebufferDc);
+    }
+}
+
+bool IsMovieActive() {
+    return g_movieActive;
 }
 
 void Shutdown() {
@@ -333,6 +477,9 @@ void Shutdown() {
     }
     g_pixelShader.Reset();
     g_vertexShader.Reset();
+    g_frameParameters.Reset();
+    g_movieView.Reset();
+    g_movieTexture.Reset();
     g_frameView.Reset();
     g_frameTexture.Reset();
     g_renderTarget.Reset();
@@ -341,6 +488,10 @@ void Shutdown() {
     g_device.Reset();
     g_backBufferWidth = 0;
     g_backBufferHeight = 0;
+    g_movieWidth = 0;
+    g_movieHeight = 0;
+    g_movieActive = false;
+    g_movieFrameAvailable = false;
     g_window = nullptr;
 }
 

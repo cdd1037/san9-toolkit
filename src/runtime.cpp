@@ -6,6 +6,7 @@
 #include "d3d11_presenter.h"
 #include "documents_overlay.h"
 #include "import_hook.h"
+#include "movie_player.h"
 #include "registry_overlay.h"
 #include "toolkit_config.h"
 #include "viewport.h"
@@ -77,8 +78,10 @@ bool IsTargetWindow(HWND window) {
 }
 
 bool RenderWindow() {
-    return IsLogicalFramebuffer(g_framebufferDc) &&
-           san9::d3d11_presenter::PresentFrame(g_framebufferDc);
+    return san9::d3d11_presenter::IsMovieActive()
+               ? san9::d3d11_presenter::PresentCurrentFrame()
+               : (IsLogicalFramebuffer(g_framebufferDc) &&
+                  san9::d3d11_presenter::PresentFrame(g_framebufferDc));
 }
 
 bool CalculateInitialOuterRect(HWND window, LONG_PTR style, LONG_PTR exStyle,
@@ -238,6 +241,7 @@ void EnforceFourByThree(HWND window, WPARAM edge, RECT& outer) {
 }
 
 LRESULT CALLBACK ScalerWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    san9::movie_player::HandleWindowMessage(window, message, wParam, lParam);
     if (san9::cursor_lock::HandleWindowMessageBefore(window, message, wParam, lParam)) {
         return 0;
     }
@@ -356,6 +360,7 @@ bool PatchRequiredHooks() {
                                       g_originalReleaseDc) &&
            san9::documents_overlay::Install(g_settings.documentsRoot) &&
            san9::registry_overlay::Install() &&
+           san9::movie_player::Install() &&
            InstallGameClock() &&
            PatchNormalizeWindowMessage();
 }
@@ -469,6 +474,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void* reserved) {
             CloseHandle(thread);
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
+        san9::movie_player::Shutdown();
         san9::registry_overlay::Shutdown();
         san9::cursor_lock::Shutdown();
         san9::d3d11_presenter::Shutdown();

@@ -8,6 +8,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "San9Toolkit.Launcher", "San
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "San9Toolkit.App", "San9Toolkit.App.vcxproj", "{137679E3-5412-466F-ACD5-9B751203E8C2}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "San9Toolkit.Tests", "San9Toolkit.Tests.vcxproj", "{72C06153-359E-47B8-A8E7-864DCFF09DF7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -34,5 +36,11 @@ Global
 		{137679E3-5412-466F-ACD5-9B751203E8C2}.Debug|x64.Build.0 = Debug|x64
 		{137679E3-5412-466F-ACD5-9B751203E8C2}.Release|x64.ActiveCfg = Release|x64
 		{137679E3-5412-466F-ACD5-9B751203E8C2}.Release|x64.Build.0 = Release|x64
+		{72C06153-359E-47B8-A8E7-864DCFF09DF7}.Debug|Win32.ActiveCfg = Debug|Win32
+		{72C06153-359E-47B8-A8E7-864DCFF09DF7}.Debug|Win32.Build.0 = Debug|Win32
+		{72C06153-359E-47B8-A8E7-864DCFF09DF7}.Release|Win32.ActiveCfg = Release|Win32
+		{72C06153-359E-47B8-A8E7-864DCFF09DF7}.Release|Win32.Build.0 = Release|Win32
+		{72C06153-359E-47B8-A8E7-864DCFF09DF7}.Debug|x64.ActiveCfg = Debug|Win32
+		{72C06153-359E-47B8-A8E7-864DCFF09DF7}.Release|x64.ActiveCfg = Release|Win32
 	EndGlobalSection
 EndGlobal

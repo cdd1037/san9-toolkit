@@ -1,5 +1,6 @@
 /build/
 /dist/
+/Release/
 /.vs/
 *.user
 *.suo
@@ -8,4 +9,3 @@
 *.ilk
 *.exp
 *.lib
-

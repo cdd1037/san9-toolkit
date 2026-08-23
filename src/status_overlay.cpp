@@ -3,6 +3,7 @@
 #include "viewport.h"
 
 #include <algorithm>
+#include <string>
 
 namespace san9::status_overlay {
 namespace {
@@ -15,7 +16,7 @@ constexpr COLORREF kTransparentColor = RGB(255, 0, 255);
 HWND g_overlay = nullptr;
 HWND g_owner = nullptr;
 HINSTANCE g_instance = nullptr;
-bool g_cursorLocked = false;
+std::wstring g_message;
 
 void DrawPanel(HWND window, HDC destination) {
     RECT client{};
@@ -80,10 +81,7 @@ void DrawPanel(HWND window, HDC destination) {
     SetTextColor(buffer, RGB(28, 24, 18));
     RECT textRect = panel;
     InflateRect(&textRect, -16, -10);
-    const wchar_t* text = g_cursorLocked
-                              ? L"鼠标已锁定在游戏画面内"
-                              : L"鼠标锁定已解除";
-    DrawTextW(buffer, text, -1, &textRect,
+    DrawTextW(buffer, g_message.c_str(), -1, &textRect,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     BitBlt(destination, 0, 0, width, height, buffer, 0, 0, SRCCOPY);
@@ -183,10 +181,14 @@ bool EnsureWindow(HWND owner) {
 } // namespace
 
 void ShowCursorLockState(HWND owner, bool enabled) {
+    ShowMessage(owner, enabled ? L"鼠标已锁定在游戏画面内" : L"鼠标锁定已解除");
+}
+
+void ShowMessage(HWND owner, const wchar_t* message) {
     if (!EnsureWindow(owner)) {
         return;
     }
-    g_cursorLocked = enabled;
+    g_message = message ? message : L"";
     UpdatePosition(owner);
     InvalidateRect(g_overlay, nullptr, FALSE);
     ShowWindow(g_overlay, SW_SHOWNOACTIVATE);
