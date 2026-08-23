@@ -8,7 +8,7 @@
 namespace san9::movie_state {
 
 constexpr std::int64_t kHundredNanosecondsPerSecond = 10'000'000;
-constexpr std::int64_t kPrebufferDuration = 2'500'000;
+constexpr std::int64_t kPrebufferDuration = 5'000'000;
 constexpr std::int64_t kLateFrameThreshold = kHundredNanosecondsPerSecond / 30;
 
 class PlaybackState {
@@ -66,6 +66,18 @@ inline bool PlaybackComplete(bool videoEnded, bool audioEnded,
                              std::size_t queuedVideoFrames,
                              std::uint32_t queuedAudioBuffers) {
     return videoEnded && audioEnded && queuedVideoFrames == 0 && queuedAudioBuffers == 0;
+}
+
+inline bool AudioUnderrun(bool started, bool audioEnded,
+                          std::uint32_t queuedAudioBuffers) {
+    return started && !audioEnded && queuedAudioBuffers == 0;
+}
+
+inline bool ReadyAfterUnderrun(std::int64_t bufferedAudio,
+                               std::uint32_t queuedAudioBuffers,
+                               bool audioEnded) {
+    return queuedAudioBuffers > 0 &&
+           (bufferedAudio >= kPrebufferDuration || audioEnded);
 }
 
 } // namespace san9::movie_state

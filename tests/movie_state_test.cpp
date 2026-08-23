@@ -41,5 +41,13 @@ int main() {
     assert(!PlaybackComplete(true, true, 1, 0));
     assert(!PlaybackComplete(true, true, 0, 1));
     assert(PlaybackComplete(true, true, 0, 0));
+    assert(!AudioUnderrun(false, false, 0));
+    assert(!AudioUnderrun(true, true, 0));
+    assert(!AudioUnderrun(true, false, 1));
+    assert(AudioUnderrun(true, false, 0));
+    assert(!ReadyAfterUnderrun(kPrebufferDuration, 0, false));
+    assert(!ReadyAfterUnderrun(kPrebufferDuration - 1, 1, false));
+    assert(ReadyAfterUnderrun(kPrebufferDuration, 1, false));
+    assert(ReadyAfterUnderrun(1, 1, true));
     return 0;
 }

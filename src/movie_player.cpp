@@ -15,14 +15,19 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace san9::movie_player {
@@ -32,7 +37,10 @@ using Microsoft::WRL::ComPtr;
 
 constexpr LONGLONG kHundredNanosecondsPerSecond =
     movie_state::kHundredNanosecondsPerSecond;
-constexpr LONGLONG kAudioQueueDuration = 5'000'000;
+constexpr LONGLONG kDecodedQueueDuration = 15'000'000;
+constexpr std::size_t kDecodedVideoFrames = 45;
+constexpr std::size_t kPresentationVideoFrames = 12;
+constexpr UINT32 kMaximumSubmittedAudioBuffers = 48;
 constexpr UINT32 kExpectedWidth = 640;
 constexpr UINT32 kExpectedHeight = 480;
 constexpr UINT32 kExpectedFrameRate = 30;
@@ -58,6 +66,7 @@ SetMessageLoopFunction g_oldSetMessageLoop = nullptr;
 
 movie_state::PlaybackState g_state;
 std::atomic_int g_volumeHundredthsDb{0};
+std::atomic_bool g_audioRebuffering{false};
 HWND g_owner = nullptr;
 void(__cdecl* g_messageLoop)() = nullptr;
 IXAudio2SourceVoice* g_activeVoice = nullptr;
@@ -69,7 +78,23 @@ struct VideoFrame {
 };
 
 struct AudioPacket {
+    LONGLONG timestamp = 0;
+    LONGLONG duration = 0;
     std::vector<std::uint8_t> bytes;
+};
+
+struct DecoderQueue {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::deque<VideoFrame> video;
+    std::deque<std::unique_ptr<AudioPacket>> audio;
+    LONGLONG audioDuration = 0;
+    bool initialized = false;
+    bool videoEnded = false;
+    bool audioEnded = false;
+    bool stop = false;
+    HRESULT error = S_OK;
+    const wchar_t* errorStage = L"decoder initialization";
 };
 
 class VoiceCallback final : public IXAudio2VoiceCallback {
@@ -252,7 +277,8 @@ HRESULT CopyVideoFrame(IMFSample* sample, LONGLONG timestamp, VideoFrame& frame)
     return S_OK;
 }
 
-HRESULT SubmitAudio(IMFSample* sample, IXAudio2SourceVoice* voice, LONGLONG& durationQueued) {
+HRESULT DecodeAudioPacket(IMFSample* sample, LONGLONG timestamp,
+                          std::unique_ptr<AudioPacket>& packet) {
     ComPtr<IMFMediaBuffer> buffer;
     HRESULT result = sample->ConvertToContiguousBuffer(&buffer);
     if (FAILED(result)) {
@@ -264,18 +290,26 @@ HRESULT SubmitAudio(IMFSample* sample, IXAudio2SourceVoice* voice, LONGLONG& dur
     if (FAILED(result)) {
         return result;
     }
-    auto packet = std::make_unique<AudioPacket>();
+    packet = std::make_unique<AudioPacket>();
+    packet->timestamp = timestamp;
     packet->bytes.assign(data, data + length);
     buffer->Unlock();
+    if (FAILED(sample->GetSampleDuration(&packet->duration)) || packet->duration <= 0) {
+        packet->duration = static_cast<LONGLONG>(length) * kHundredNanosecondsPerSecond /
+                           (kExpectedSampleRate * kExpectedChannels * sizeof(std::int16_t));
+    }
+    return S_OK;
+}
+
+HRESULT SubmitAudioPacket(std::unique_ptr<AudioPacket> packet,
+                          IXAudio2SourceVoice* voice) {
     XAUDIO2_BUFFER xaudioBuffer{};
-    xaudioBuffer.AudioBytes = length;
+    xaudioBuffer.AudioBytes = static_cast<UINT32>(packet->bytes.size());
     xaudioBuffer.pAudioData = packet->bytes.data();
     xaudioBuffer.pContext = packet.get();
-    result = voice->SubmitSourceBuffer(&xaudioBuffer);
+    const HRESULT result = voice->SubmitSourceBuffer(&xaudioBuffer);
     if (SUCCEEDED(result)) {
         packet.release();
-        durationQueued += static_cast<LONGLONG>(length) * kHundredNanosecondsPerSecond /
-                          (kExpectedSampleRate * kExpectedChannels * sizeof(std::int16_t));
     }
     return result;
 }
@@ -284,7 +318,7 @@ void ApplyPauseState(IXAudio2SourceVoice* voice) {
     if (!voice) {
         return;
     }
-    if (g_state.IsPaused()) {
+    if (g_state.IsPaused() || g_audioRebuffering.load()) {
         voice->Stop(0);
     } else {
         voice->Start(0);
@@ -322,6 +356,128 @@ LRESULT CALLBACK MovieGetMessageHook(int code, WPARAM wParam, LPARAM lParam) {
     return CallNextHookEx(g_messageHook, code, wParam, lParam);
 }
 
+HRESULT OpenReader(const wchar_t* path, ComPtr<IMFSourceReader>& reader,
+                   DWORD& videoStream, DWORD& audioStream, const wchar_t*& stage) {
+    ComPtr<IMFByteStream> byteStream;
+    stage = L"byte stream creation";
+    HRESULT result = MFCreateFile(MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST,
+                                  MF_FILEFLAGS_NONE, path, &byteStream);
+    ComPtr<IMFAttributes> streamAttributes;
+    if (SUCCEEDED(result)) result = byteStream.As(&streamAttributes);
+    if (SUCCEEDED(result)) {
+        result = streamAttributes->SetString(MF_BYTESTREAM_CONTENT_TYPE, L"video/avi");
+    }
+    ComPtr<IMFAttributes> readerAttributes;
+    if (SUCCEEDED(result)) result = MFCreateAttributes(&readerAttributes, 1);
+    if (SUCCEEDED(result)) {
+        result = readerAttributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+    }
+    stage = L"AVI source reader creation";
+    if (SUCCEEDED(result)) {
+        result = MFCreateSourceReaderFromByteStream(byteStream.Get(), readerAttributes.Get(),
+                                                    &reader);
+    }
+    if (SUCCEEDED(result)) {
+        stage = L"native stream validation";
+        result = ValidateNativeStreams(reader.Get(), videoStream, audioStream);
+    }
+    if (SUCCEEDED(result)) {
+        stage = L"decoder output configuration";
+        result = ConfigureOutputs(reader.Get(), videoStream, audioStream);
+    }
+    return result;
+}
+
+void DecodeIntoQueue(std::wstring path, DecoderQueue& queue) {
+    const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool uninitializeCom = SUCCEEDED(comResult);
+    HRESULT result = comResult == RPC_E_CHANGED_MODE ? S_OK : comResult;
+    const wchar_t* stage = L"decoder COM initialization";
+    ComPtr<IMFSourceReader> reader;
+    DWORD videoStream = 0;
+    DWORD audioStream = 0;
+    if (SUCCEEDED(result)) {
+        result = OpenReader(path.c_str(), reader, videoStream, audioStream, stage);
+    }
+    {
+        std::lock_guard lock(queue.mutex);
+        queue.initialized = true;
+        queue.error = result;
+        queue.errorStage = stage;
+    }
+    queue.changed.notify_all();
+
+    while (SUCCEEDED(result)) {
+        {
+            std::unique_lock lock(queue.mutex);
+            queue.changed.wait(lock, [&queue] {
+                return queue.stop ||
+                       (queue.video.size() < kDecodedVideoFrames &&
+                        queue.audioDuration < kDecodedQueueDuration);
+            });
+            if (queue.stop) break;
+        }
+
+        DWORD actualStream = 0;
+        DWORD flags = 0;
+        LONGLONG timestamp = 0;
+        ComPtr<IMFSample> sample;
+        stage = L"sample decoding";
+        result = reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_ANY_STREAM), 0,
+                                    &actualStream, &flags, &timestamp, &sample);
+        if (FAILED(result)) break;
+        if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0) {
+            result = MF_E_TRANSFORM_STREAM_CHANGE;
+            stage = L"unexpected media type change";
+            break;
+        }
+
+        bool changed = false;
+        if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
+            std::lock_guard lock(queue.mutex);
+            if (actualStream == videoStream) queue.videoEnded = true;
+            if (actualStream == audioStream) queue.audioEnded = true;
+            if (actualStream != videoStream && actualStream != audioStream) {
+                queue.videoEnded = true;
+                queue.audioEnded = true;
+            }
+            changed = true;
+        } else if (sample && actualStream == videoStream) {
+            VideoFrame frame;
+            result = CopyVideoFrame(sample.Get(), timestamp, frame);
+            if (SUCCEEDED(result)) {
+                std::lock_guard lock(queue.mutex);
+                queue.video.push_back(std::move(frame));
+                changed = true;
+            }
+        } else if (sample && actualStream == audioStream) {
+            std::unique_ptr<AudioPacket> packet;
+            result = DecodeAudioPacket(sample.Get(), timestamp, packet);
+            if (SUCCEEDED(result)) {
+                std::lock_guard lock(queue.mutex);
+                queue.audioDuration += packet->duration;
+                queue.audio.push_back(std::move(packet));
+                changed = true;
+            }
+        }
+        if (changed) queue.changed.notify_all();
+        {
+            std::lock_guard lock(queue.mutex);
+            if (queue.videoEnded && queue.audioEnded) break;
+        }
+    }
+
+    {
+        std::lock_guard lock(queue.mutex);
+        if (FAILED(result)) {
+            queue.error = result;
+            queue.errorStage = stage;
+        }
+    }
+    queue.changed.notify_all();
+    if (uninitializeCom) CoUninitialize();
+}
+
 HRESULT RunPlayback(HWND owner, const wchar_t* path) {
     HRESULT result = ValidateAviSignature(path);
     const wchar_t* stage = L"AVI signature validation";
@@ -343,50 +499,29 @@ HRESULT RunPlayback(HWND owner, const wchar_t* path) {
         return result;
     }
 
-    ComPtr<IMFByteStream> byteStream;
-    stage = L"byte stream creation";
-    result = MFCreateFile(MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST,
-                          MF_FILEFLAGS_NONE, path, &byteStream);
-    ComPtr<IMFAttributes> streamAttributes;
-    if (SUCCEEDED(result)) {
-        result = byteStream.As(&streamAttributes);
-    }
-    if (SUCCEEDED(result)) {
-        result = streamAttributes->SetString(MF_BYTESTREAM_CONTENT_TYPE, L"video/avi");
-    }
-    ComPtr<IMFSourceReader> reader;
-    if (SUCCEEDED(result)) {
-        ComPtr<IMFAttributes> readerAttributes;
-        result = MFCreateAttributes(&readerAttributes, 1);
-        if (SUCCEEDED(result)) {
-            result = readerAttributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
-        }
-        stage = L"AVI source reader creation";
-        if (SUCCEEDED(result)) {
-            result = MFCreateSourceReaderFromByteStream(byteStream.Get(), readerAttributes.Get(),
-                                                        &reader);
+    DecoderQueue decoder;
+    std::thread decoderThread(&DecodeIntoQueue, std::wstring(path), std::ref(decoder));
+    while (!g_state.IsStopRequested()) {
+        PumpMessages();
+        std::unique_lock lock(decoder.mutex);
+        if (decoder.changed.wait_for(lock, std::chrono::milliseconds(5),
+                                     [&decoder] { return decoder.initialized; })) {
+            result = decoder.error;
+            stage = decoder.errorStage;
+            break;
         }
     }
-    DWORD videoStream = 0;
-    DWORD audioStream = 0;
-    if (SUCCEEDED(result)) {
-        stage = L"native stream validation";
-        result = ValidateNativeStreams(reader.Get(), videoStream, audioStream);
-    }
-    if (SUCCEEDED(result)) {
-        stage = L"decoder output configuration";
-        result = ConfigureOutputs(reader.Get(), videoStream, audioStream);
-    }
+    const bool cancelledBeforeSetup = g_state.IsStopRequested();
 
     ComPtr<IXAudio2> xaudio;
     IXAudio2MasteringVoice* masteringVoice = nullptr;
     IXAudio2SourceVoice* sourceVoice = nullptr;
     VoiceCallback voiceCallback;
-    if (SUCCEEDED(result)) {
+    if (SUCCEEDED(result) && !cancelledBeforeSetup) {
         stage = L"XAudio2 creation";
         result = XAudio2Create(&xaudio, 0, XAUDIO2_DEFAULT_PROCESSOR);
     }
-    if (SUCCEEDED(result)) {
+    if (SUCCEEDED(result) && !cancelledBeforeSetup) {
         result = xaudio->CreateMasteringVoice(&masteringVoice, kExpectedChannels,
                                                kExpectedSampleRate);
     }
@@ -397,11 +532,11 @@ HRESULT RunPlayback(HWND owner, const wchar_t* path) {
     waveFormat.wBitsPerSample = 16;
     waveFormat.nBlockAlign = waveFormat.nChannels * waveFormat.wBitsPerSample / 8;
     waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
-    if (SUCCEEDED(result)) {
+    if (SUCCEEDED(result) && !cancelledBeforeSetup) {
         result = xaudio->CreateSourceVoice(&sourceVoice, &waveFormat, 0,
                                            XAUDIO2_DEFAULT_FREQ_RATIO, &voiceCallback);
     }
-    if (SUCCEEDED(result)) {
+    if (SUCCEEDED(result) && !cancelledBeforeSetup) {
         sourceVoice->SetVolume(std::pow(10.0F, g_volumeHundredthsDb.load() / 2000.0F));
         if (!d3d11_presenter::BeginMovie(owner, kExpectedWidth, kExpectedHeight)) {
             result = E_FAIL;
@@ -415,71 +550,92 @@ HRESULT RunPlayback(HWND owner, const wchar_t* path) {
     bool videoEnded = false;
     bool audioEnded = false;
     bool started = false;
-    while (SUCCEEDED(result) && !g_state.IsStopRequested()) {
+    bool audioRunning = false;
+    while (SUCCEEDED(result) && !cancelledBeforeSetup && !g_state.IsStopRequested()) {
         PumpMessages();
-        if (g_state.IsPaused()) {
-            Sleep(10);
-            continue;
-        }
 
         XAUDIO2_VOICE_STATE voiceState{};
-        if (sourceVoice) {
-            sourceVoice->GetState(&voiceState);
-        }
-        const LONGLONG played = static_cast<LONGLONG>(voiceState.SamplesPlayed) *
-                               kHundredNanosecondsPerSecond / kExpectedSampleRate;
-        const LONGLONG buffered = std::max<LONGLONG>(0, audioQueued - played);
-        const bool needData = !videoEnded || (!audioEnded && buffered < kAudioQueueDuration);
-        if (needData && (!started || frames.size() < 8)) {
-            DWORD actualStream = 0;
-            DWORD flags = 0;
-            LONGLONG timestamp = 0;
-            ComPtr<IMFSample> sample;
-            stage = L"sample decoding";
-            result = reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_ANY_STREAM), 0,
-                                        &actualStream,
-                                        &flags, &timestamp, &sample);
-            if (FAILED(result)) break;
-            if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
-                if (actualStream == videoStream) videoEnded = true;
-                if (actualStream == audioStream) audioEnded = true;
-                if (actualStream != videoStream && actualStream != audioStream) {
-                    videoEnded = true;
-                    audioEnded = true;
-                }
+        sourceVoice->GetState(&voiceState);
+        std::deque<std::unique_ptr<AudioPacket>> audioToSubmit;
+        {
+            std::lock_guard lock(decoder.mutex);
+            while (!decoder.video.empty() && frames.size() < kPresentationVideoFrames) {
+                frames.push_back(std::move(decoder.video.front()));
+                decoder.video.pop_front();
             }
-            if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0) {
-                result = MF_E_TRANSFORM_STREAM_CHANGE;
-                stage = L"unexpected media type change";
+            UINT32 availableSlots = voiceState.BuffersQueued < kMaximumSubmittedAudioBuffers
+                                        ? kMaximumSubmittedAudioBuffers - voiceState.BuffersQueued
+                                        : 0;
+            while (availableSlots-- > 0 && !decoder.audio.empty()) {
+                decoder.audioDuration -= decoder.audio.front()->duration;
+                audioToSubmit.push_back(std::move(decoder.audio.front()));
+                decoder.audio.pop_front();
+            }
+            videoEnded = decoder.videoEnded;
+            audioEnded = decoder.audioEnded;
+            if (FAILED(decoder.error)) {
+                result = decoder.error;
+                stage = decoder.errorStage;
+            }
+        }
+        decoder.changed.notify_all();
+        if (FAILED(result)) break;
+
+        for (auto& packet : audioToSubmit) {
+            if (audioStartTimestamp < 0) audioStartTimestamp = packet->timestamp;
+            audioQueued += packet->duration;
+            result = SubmitAudioPacket(std::move(packet), sourceVoice);
+            if (FAILED(result)) {
+                stage = L"XAudio2 buffer submission";
                 break;
             }
-            if (sample && actualStream == videoStream) {
-                VideoFrame frame;
-                result = CopyVideoFrame(sample.Get(), timestamp, frame);
-                if (SUCCEEDED(result)) frames.push_back(std::move(frame));
-            } else if (sample && actualStream == audioStream) {
-                if (audioStartTimestamp < 0) audioStartTimestamp = timestamp;
-                result = SubmitAudio(sample.Get(), sourceVoice, audioQueued);
-            }
         }
+        if (FAILED(result)) break;
 
-        if (!started && movie_state::ReadyToStart(!frames.empty(), audioQueued, audioEnded)) {
+        if (!started && !g_state.IsPaused() &&
+            movie_state::ReadyToStart(!frames.empty(), audioQueued, audioEnded)) {
             result = sourceVoice->Start(0);
             if (SUCCEEDED(result)) {
                 started = true;
+                audioRunning = true;
+                g_audioRebuffering.store(false);
                 g_activeVoice = sourceVoice;
             }
         }
-        if (!started && videoEnded && audioEnded) {
+        if (!started && videoEnded && audioEnded &&
+            (frames.empty() || audioQueued == 0)) {
             result = MF_E_END_OF_STREAM;
             stage = L"media prebuffer";
             break;
         }
         if (started) {
             sourceVoice->GetState(&voiceState);
+            const LONGLONG played = static_cast<LONGLONG>(voiceState.SamplesPlayed) *
+                                   kHundredNanosecondsPerSecond / kExpectedSampleRate;
+            const LONGLONG buffered = std::max<LONGLONG>(0, audioQueued - played);
+            if (audioRunning &&
+                movie_state::AudioUnderrun(started, audioEnded, voiceState.BuffersQueued)) {
+                sourceVoice->Stop(0);
+                audioRunning = false;
+                g_audioRebuffering.store(true);
+                OutputDebugStringW(L"San9Toolkit movie: audio underrun; rebuffering.\n");
+            }
+            if (!audioRunning && !g_state.IsPaused() && movie_state::ReadyAfterUnderrun(
+                                     buffered, voiceState.BuffersQueued, audioEnded)) {
+                result = sourceVoice->Start(0);
+                if (FAILED(result)) {
+                    stage = L"XAudio2 restart after rebuffer";
+                    break;
+                }
+                audioRunning = true;
+                g_audioRebuffering.store(false);
+            }
+            if (g_state.IsPaused() || !audioRunning) {
+                Sleep(5);
+                continue;
+            }
             const LONGLONG clock = audioStartTimestamp +
-                                   static_cast<LONGLONG>(voiceState.SamplesPlayed) *
-                                       kHundredNanosecondsPerSecond / kExpectedSampleRate;
+                                   played;
             std::vector<std::int64_t> timestamps;
             timestamps.reserve(frames.size());
             for (const VideoFrame& frame : frames) timestamps.push_back(frame.timestamp);
@@ -509,6 +665,13 @@ HRESULT RunPlayback(HWND owner, const wchar_t* path) {
     }
 
     g_activeVoice = nullptr;
+    g_audioRebuffering.store(false);
+    {
+        std::lock_guard lock(decoder.mutex);
+        decoder.stop = true;
+    }
+    decoder.changed.notify_all();
+    decoderThread.join();
     if (sourceVoice) {
         sourceVoice->Stop(0);
         sourceVoice->FlushSourceBuffers();
