@@ -31,7 +31,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="src\app.cpp" /></ItemGroup>
-  <ItemGroup><ClInclude Include="src\toolkit_config.h" /><ClInclude Include="src\resources\resource.h" /></ItemGroup>
+  <ItemGroup><ClInclude Include="src\documents_path.h" /><ClInclude Include="src\toolkit_config.h" /><ClInclude Include="src\resources\resource.h" /></ItemGroup>
   <ItemGroup><ResourceCompile Include="src\resources\app.rc" /></ItemGroup>
   <ItemGroup><None Include="src\ui\app.uix" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

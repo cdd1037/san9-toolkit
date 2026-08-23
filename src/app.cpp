@@ -5,6 +5,7 @@
 #include <shobjidl.h>
 #include <ui_core.h>
 
+#include "documents_path.h"
 #include "toolkit_config.h"
 #include "resources/resource.h"
 
@@ -169,6 +170,12 @@ void OnLaunch(UiWidget, void*) {
     if (!SaveSettings(false)) return;
     const std::filesystem::path game(g_app.settings.gameExecutable);
     if (!IsSupportedGame(game)) { ShowError(L"找不到可用的 San9PK.exe，或者游戏版本不受支持。请重新选择游戏主程序。"); return; }
+    std::string encodedDocumentsRoot;
+    if (!g_app.settings.documentsRoot.empty() &&
+        !san9::documents_path::EncodeRoot(g_app.settings.documentsRoot, encodedDocumentsRoot)) {
+        ShowError(L"文档根目录必须是当前 Windows 代码页可表示的绝对路径，并且不能超过游戏的路径长度限制。");
+        return;
+    }
     const auto bootstrap = g_app.root / L"bin" / L"x86" / L"San9Toolkit.Bootstrap.exe";
     if (!std::filesystem::is_regular_file(bootstrap)) { ShowError(L"工具箱文件不完整，请重新解压完整的程序包。"); return; }
     const std::wstring eventName = L"Local\\San9Toolkit.GuiReady." + std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(GetTickCount64());
@@ -290,7 +297,7 @@ void LoadDefaults() {
     if (g_app.settings.documentsRoot.empty()) {
         PWSTR documents = nullptr;
         if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, nullptr, &documents))) {
-            g_app.settings.documentsRoot = (std::filesystem::path(documents) / L"Koei").wstring(); CoTaskMemFree(documents);
+            g_app.settings.documentsRoot = documents; CoTaskMemFree(documents);
         }
     }
 }

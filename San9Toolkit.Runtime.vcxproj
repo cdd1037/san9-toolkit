@@ -26,6 +26,7 @@
     <ClCompile Include="src\code_hook.cpp" />
     <ClCompile Include="src\cursor_lock.cpp" />
     <ClCompile Include="src\d3d11_presenter.cpp" />
+    <ClCompile Include="src\documents_overlay.cpp" />
     <ClCompile Include="src\registry_overlay.cpp" />
     <ClCompile Include="src\runtime.cpp" />
     <ClCompile Include="src\status_overlay.cpp" />
@@ -35,6 +36,8 @@
     <ClInclude Include="src\code_hook.h" />
     <ClInclude Include="src\cursor_lock.h" />
     <ClInclude Include="src\d3d11_presenter.h" />
+    <ClInclude Include="src\documents_overlay.h" />
+    <ClInclude Include="src\documents_path.h" />
     <ClInclude Include="src\import_hook.h" />
     <ClInclude Include="src\registry_overlay.h" />
     <ClInclude Include="src\status_overlay.h" />

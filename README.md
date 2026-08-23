@@ -100,7 +100,7 @@ GUI 会管理以下配置：
 ```ini
 [Toolkit]
 GameExecutable=D:\Games\San9\San9PK.exe
-DocumentsRoot=C:\Users\User\Documents\Koei
+DocumentsRoot=D:\Games\San9Documents
 CursorLockVirtualKey=123
 ScaleInitialWindowForSystemDpi=1
 WindowTitle=三國志ⅨPK
@@ -116,7 +116,11 @@ PlayMovie=1
 FullScreen=0
 ```
 
-文档根目录第一版只选择和记录，不做文件创建、迁移或重定向。`GameReportDlg` 和
+“存档与用户数据”功能用于把原作默认写入 Windows“文档”的用户文件集中到指定磁盘，
+便于备份、便携管理或隔离不同环境。`DocumentsRoot` 会在游戏进程内替换该系统位置；原作继续自行追加
+`Koei\San9 Tc` 和 `Koei\San9PK Tc` 并按原有行为创建目录。Toolkit 不迁移或复制旧位置的
+存档、登录武将等文件；需要沿用时应由用户自行复制。路径必须是目标游戏当前 ANSI 代码页
+可表示的绝对路径，并为原作追加的子目录保留在 `MAX_PATH` 内。`GameReportDlg` 和
 `JumpList` 在 GUI 中仅作禁用占位符。
 
 已由原作界面标签及按钮处理函数共同确认：`MessageSpeed` 为 `0=快`、`1=普通`、

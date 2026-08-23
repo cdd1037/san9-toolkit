@@ -136,11 +136,11 @@
                 <button id="browseGame" class="browse">选择文件</button>
               </div>
               <div class="row">
-                <div class="path-copy"><label class="path-title">游戏文档位置</label><small class="path-help">默认为“文档\Koei”</small></div>
-                <input id="documentsPath" class="path-input" type="text" placeholder="Documents\Koei"/>
+                <div class="path-copy"><label class="path-title">存档与用户数据</label><small class="path-help">更改个人文件保存位置</small></div>
+                <input id="documentsPath" class="path-input" type="text" placeholder="Documents"/>
                 <button id="browseDocuments" class="browse">选择文件夹</button>
               </div>
-              <p class="inline-note">这个文档位置目前只会被记住，暂不会改变游戏读取存档的位置。</p>
+              <p class="inline-note">用于将存档、武将编辑等用户文件备份或隔离。游戏会使用所选目录下的 Koei\San9 Tc 和 Koei\San9PK Tc。</p>
             </div>
 
             <div id="toolsCard" class="card">

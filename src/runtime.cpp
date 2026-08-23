@@ -4,6 +4,7 @@
 #include "code_hook.h"
 #include "cursor_lock.h"
 #include "d3d11_presenter.h"
+#include "documents_overlay.h"
 #include "import_hook.h"
 #include "registry_overlay.h"
 #include "toolkit_config.h"
@@ -353,6 +354,7 @@ bool PatchRequiredHooks() {
                                       g_originalGetCursorPos) &&
            san9::import_hook::Install("user32.dll", "ReleaseDC", &ScaledReleaseDc,
                                       g_originalReleaseDc) &&
+           san9::documents_overlay::Install(g_settings.documentsRoot) &&
            san9::registry_overlay::Install() &&
            InstallGameClock() &&
            PatchNormalizeWindowMessage();

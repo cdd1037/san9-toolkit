@@ -3,6 +3,8 @@
 
 [Toolkit]
 GameExecutable=
+; Replaces the Windows Documents root inside the game process. The game appends
+; Koei\San9 Tc and Koei\San9PK Tc itself. Leave empty to use the system location.
 DocumentsRoot=
 CursorLockVirtualKey=123
 ScaleInitialWindowForSystemDpi=1
