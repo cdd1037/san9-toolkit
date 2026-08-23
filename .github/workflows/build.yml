@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Core UI fork SDK
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'core-ui.zip'
+          $sdkParent = Join-Path $env:RUNNER_TEMP 'core-ui-sdk'
+          Invoke-WebRequest `
+            -Uri 'https://github.com/cdd1037/core-ui/releases/download/v1.7.0-cdd.1/core-ui-v1.7.0-cdd.1-windows-x64.zip' `
+            -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $sdkParent
+          "CORE_UI_ROOT=$sdkParent\core-ui-v1.7.0" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build, test and package
+        shell: pwsh
+        run: ./package.ps1 -CoreUiRoot $env:CORE_UI_ROOT
+
+      - name: Upload player package
+        uses: actions/upload-artifact@v4
+        with:
+          name: San9Toolkit-windows
+          path: |
+            dist/San9Toolkit-v*-windows.zip
+            dist/San9Toolkit-v*-windows.zip.sha256
+          if-no-files-found: error
