@@ -51,6 +51,32 @@ int main() {
     assert(ReadyAfterUnderrun(kPrebufferDuration, 1, false));
     assert(ReadyAfterUnderrun(1, 1, true));
 
+    using san9::movie_state::DecodeStream;
+    assert(SelectDecodeStream(false, 45, 45, false, 0, 15'000'000,
+                              DecodeStream::Video) ==
+           DecodeStream::Audio);
+    assert(SelectDecodeStream(false, 0, 45, false, 15'000'000, 15'000'000,
+                              DecodeStream::Audio) ==
+           DecodeStream::Video);
+    assert(SelectDecodeStream(false, 45, 45, false, 15'000'000, 15'000'000,
+                              DecodeStream::Audio) ==
+           DecodeStream::None);
+    assert(SelectDecodeStream(true, 0, 45, false, 0, 15'000'000,
+                              DecodeStream::Video) ==
+           DecodeStream::Audio);
+    assert(SelectDecodeStream(false, 0, 45, true, 0, 15'000'000,
+                              DecodeStream::Audio) ==
+           DecodeStream::Video);
+    assert(SelectDecodeStream(true, 0, 45, true, 0, 15'000'000,
+                              DecodeStream::Audio) ==
+           DecodeStream::None);
+    assert(SelectDecodeStream(false, 0, 45, false, 0, 15'000'000,
+                              DecodeStream::Audio) ==
+           DecodeStream::Audio);
+    assert(SelectDecodeStream(false, 0, 45, false, 0, 15'000'000,
+                              DecodeStream::Video) ==
+           DecodeStream::Video);
+
     using san9::toolkit_config::EdgeScrollMode;
     using san9::toolkit_config::GetEdgeScrollMode;
     using san9::toolkit_config::SetEdgeScrollMode;

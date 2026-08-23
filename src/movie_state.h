@@ -11,6 +11,32 @@ constexpr std::int64_t kHundredNanosecondsPerSecond = 10'000'000;
 constexpr std::int64_t kPrebufferDuration = 5'000'000;
 constexpr std::int64_t kLateFrameThreshold = kHundredNanosecondsPerSecond / 30;
 
+enum class DecodeStream {
+    None,
+    Video,
+    Audio,
+};
+
+inline DecodeStream SelectDecodeStream(bool videoEnded, std::size_t queuedVideoFrames,
+                                       std::size_t maximumVideoFrames, bool audioEnded,
+                                       std::int64_t bufferedAudio,
+                                       std::int64_t maximumBufferedAudio,
+                                       DecodeStream preferred) {
+    const bool canDecodeVideo = !videoEnded && queuedVideoFrames < maximumVideoFrames;
+    const bool canDecodeAudio = !audioEnded && bufferedAudio < maximumBufferedAudio;
+    if (canDecodeVideo && canDecodeAudio) {
+        return preferred == DecodeStream::Video ? DecodeStream::Video
+                                                : DecodeStream::Audio;
+    }
+    if (canDecodeAudio) {
+        return DecodeStream::Audio;
+    }
+    if (canDecodeVideo) {
+        return DecodeStream::Video;
+    }
+    return DecodeStream::None;
+}
+
 class PlaybackState {
 public:
     bool Begin() {

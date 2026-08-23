@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 
 namespace san9::d3d11_presenter {
 
@@ -100,6 +101,7 @@ UINT g_movieWidth = 0;
 UINT g_movieHeight = 0;
 bool g_movieActive = false;
 bool g_movieFrameAvailable = false;
+std::recursive_mutex g_presenterMutex;
 
 struct FrameParameters {
     float width;
@@ -243,6 +245,12 @@ void DrawScaledFrame(ID3D11ShaderResourceView* view, UINT width, UINT height,
 } // namespace
 
 bool Initialize(HWND window) {
+    const std::lock_guard lock(g_presenterMutex);
+    if (window && g_window == window && g_device && g_context && g_swapChain &&
+        g_renderTarget && g_frameTexture && g_frameView && g_frameParameters &&
+        g_vertexShader && g_pixelShader) {
+        return true;
+    }
     Shutdown();
     if (!window) {
         return false;
@@ -343,6 +351,7 @@ bool Initialize(HWND window) {
 }
 
 bool PresentNow(HDC framebufferDc) {
+    const std::lock_guard lock(g_presenterMutex);
     BITMAP bitmap{};
     if (!g_device || !g_context || !g_swapChain || !EnsureRenderTarget() ||
         !ReadFramebuffer(framebufferDc, bitmap)) {
@@ -362,6 +371,7 @@ bool PresentNow(HDC framebufferDc) {
 }
 
 bool QueueFrame(HDC framebufferDc) {
+    const std::lock_guard lock(g_presenterMutex);
     if (!framebufferDc || !g_device || !g_window) {
         return false;
     }
@@ -371,10 +381,12 @@ bool QueueFrame(HDC framebufferDc) {
 }
 
 bool PresentFrame(HDC framebufferDc) {
+    const std::lock_guard lock(g_presenterMutex);
     return PresentNow(framebufferDc);
 }
 
 bool PresentPendingFrame() {
+    const std::lock_guard lock(g_presenterMutex);
     if (InterlockedExchange(&g_presentPending, 0) == 0) {
         return true;
     }
@@ -385,6 +397,7 @@ bool PresentPendingFrame() {
 }
 
 bool BeginMovie(HWND window, UINT width, UINT height) {
+    const std::lock_guard lock(g_presenterMutex);
     if (!window || width == 0 || height == 0) {
         return false;
     }
@@ -420,6 +433,7 @@ bool BeginMovie(HWND window, UINT width, UINT height) {
 }
 
 bool PresentMovieFrame(const void* pixels, UINT rowPitch) {
+    const std::lock_guard lock(g_presenterMutex);
     if (!g_movieActive || !g_movieTexture || !pixels ||
         rowPitch < g_movieWidth * sizeof(std::uint32_t) || !EnsureRenderTarget()) {
         return false;
@@ -442,6 +456,7 @@ bool PresentMovieFrame(const void* pixels, UINT rowPitch) {
 }
 
 bool PresentCurrentFrame() {
+    const std::lock_guard lock(g_presenterMutex);
     if (g_movieActive) {
         if (!g_movieFrameAvailable || !EnsureRenderTarget()) {
             return true;
@@ -453,6 +468,7 @@ bool PresentCurrentFrame() {
 }
 
 void EndMovie() {
+    const std::lock_guard lock(g_presenterMutex);
     g_movieActive = false;
     g_movieFrameAvailable = false;
     g_movieWidth = 0;
@@ -465,10 +481,12 @@ void EndMovie() {
 }
 
 bool IsMovieActive() {
+    const std::lock_guard lock(g_presenterMutex);
     return g_movieActive;
 }
 
 void Shutdown() {
+    const std::lock_guard lock(g_presenterMutex);
     InterlockedExchange(&g_presentPending, 0);
     g_pendingFramebufferDc = nullptr;
     if (g_context) {

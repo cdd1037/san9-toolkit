@@ -407,25 +407,44 @@ void DecodeIntoQueue(std::wstring path, DecoderQueue& queue) {
     }
     queue.changed.notify_all();
 
+    movie_state::DecodeStream preferred = movie_state::DecodeStream::Audio;
     while (SUCCEEDED(result)) {
+        movie_state::DecodeStream requested = movie_state::DecodeStream::None;
         {
             std::unique_lock lock(queue.mutex);
             queue.changed.wait(lock, [&queue] {
-                return queue.stop ||
-                       (queue.video.size() < kDecodedVideoFrames &&
-                        queue.audioDuration < kDecodedQueueDuration);
+                return queue.stop || movie_state::SelectDecodeStream(
+                                         queue.videoEnded, queue.video.size(),
+                                         kDecodedVideoFrames, queue.audioEnded,
+                                         queue.audioDuration, kDecodedQueueDuration,
+                                         movie_state::DecodeStream::Audio) !=
+                                         movie_state::DecodeStream::None;
             });
             if (queue.stop) break;
+            requested = movie_state::SelectDecodeStream(
+                queue.videoEnded, queue.video.size(), kDecodedVideoFrames,
+                queue.audioEnded, queue.audioDuration, kDecodedQueueDuration, preferred);
         }
+        preferred = requested == movie_state::DecodeStream::Audio
+                        ? movie_state::DecodeStream::Video
+                        : movie_state::DecodeStream::Audio;
 
         DWORD actualStream = 0;
         DWORD flags = 0;
         LONGLONG timestamp = 0;
         ComPtr<IMFSample> sample;
         stage = L"sample decoding";
-        result = reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_ANY_STREAM), 0,
+        const DWORD requestedStream = requested == movie_state::DecodeStream::Audio
+                                          ? audioStream
+                                          : videoStream;
+        result = reader->ReadSample(requestedStream, 0,
                                     &actualStream, &flags, &timestamp, &sample);
         if (FAILED(result)) break;
+        if (actualStream != requestedStream) {
+            result = MF_E_INVALIDSTREAMNUMBER;
+            stage = L"unexpected decoded stream";
+            break;
+        }
         if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0) {
             result = MF_E_TRANSFORM_STREAM_CHANGE;
             stage = L"unexpected media type change";
@@ -435,12 +454,8 @@ void DecodeIntoQueue(std::wstring path, DecoderQueue& queue) {
         bool changed = false;
         if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
             std::lock_guard lock(queue.mutex);
-            if (actualStream == videoStream) queue.videoEnded = true;
-            if (actualStream == audioStream) queue.audioEnded = true;
-            if (actualStream != videoStream && actualStream != audioStream) {
-                queue.videoEnded = true;
-                queue.audioEnded = true;
-            }
+            if (requested == movie_state::DecodeStream::Video) queue.videoEnded = true;
+            if (requested == movie_state::DecodeStream::Audio) queue.audioEnded = true;
             changed = true;
         } else if (sample && actualStream == videoStream) {
             VideoFrame frame;
