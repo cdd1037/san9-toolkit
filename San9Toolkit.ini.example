@@ -1,0 +1,45 @@
+; Copy this file to San9Toolkit.ini next to San9Toolkit.exe.
+; Omitted values use the original game's compiled defaults.
+
+[Configs]
+; Toolkit rendering requires windowed mode. This is forced to 0 even when omitted.
+FullScreen=0
+
+; Common binary switches: 0 = off, 1 = on.
+PlayBGM=1
+PlaySound=1
+PlayMovie=1
+
+; Confirmed original labels:
+; MessageSpeed: 0 = Fast, 1 = Normal, 2 = Pause.
+; GameReport: 0 = Off, 1 = Summary, 2 = Detailed.
+; GameSpeed is deliberately omitted: the target game persists it but has no
+; confirmed runtime consumer, and Toolkit's built-in 2x clock does not read it.
+; The exact labels for the remaining three-state options are not yet confirmed.
+MessageSpeed=1
+GameReport=1
+GameReportDlg=1
+JumpList=1
+SvLdPage=0
+
+; The remaining Configs values are game-managed state. They are listed so the
+; virtual registry inventory is complete. Leave them omitted unless diagnosing
+; a specific value; the game writes them here when it saves its configuration.
+;
+; Dialog and main-window positions:
+; YNPositionX=
+; YNPositionY=
+; KakuninPositionX=
+; KakuninPositionY=
+; AppPositionX=
+; AppPositionY=
+;
+; Packed game state. Bit meanings are not yet fully mapped:
+; FlagData=
+; ArtData=
+;
+; Trial-story progress:
+; TrialStory00=
+; TrialStory01=
+; TrialStoryEvent=
+; TrialStoryClear=

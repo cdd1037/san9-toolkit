@@ -1,9 +1,9 @@
 # San9 Toolkit
 
-这是一个面向《三国志 IX》的本地辅助工具仓库。当前首个功能仅支持
-`SRC-SAN9PK-TC-101`：由 32 位启动器挂起目标进程、注入运行时 DLL，再恢复主线程，
-为原版窗口提供等比缩放。仓库后续可以加入其他相互独立的辅助功能，不以窗口缩放作为
-项目边界。逆向依据与验证结果保存在上级研究仓库的 `RE-SAN9PK-0062`。
+这是一个面向《三国志 IX》的本地辅助工具仓库。当前仅支持 `SRC-SAN9PK-TC-101`：
+由 32 位启动器挂起目标进程、注入运行时 DLL，再恢复主线程，为原版窗口提供等比缩放和
+进程内用户配置。仓库后续可以加入其他相互独立的辅助功能，不以窗口缩放作为项目边界。
+逆向依据与验证结果保存在上级研究仓库的 `RE-SAN9PK-0062` 与 `RE-SAN9PK-0065`。
 
 ## 已知目标版本
 
@@ -15,7 +15,12 @@
 启动器会校验 SHA-256；不匹配时不会启动或注入。恢复游戏主线程后，启动器还会等待
 DLL 通过窗口属性报告安装成功；失败或超时不会留下一个未缩放的测试进程继续运行。
 启动器还会在目标主线程恢复和 DLL 注入之前，将目标进程设为 system-DPI-aware，避免
-GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。
+GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。Runtime 内部配置项
+`scaleInitialWindowForSystemDpi` 默认开启：初始客户区按 system DPI 将 1024×768 成比例
+放大，窗口边框按同一 DPI 计算；该项暂不写入 INI，也没有 GUI 入口。另一个内部配置项
+`accelerateGameClock` 默认开启，`gameClockRate` 固定为 `2`：Runtime 代理主游戏模块导入的
+WinMM `timeGetTime`，向原作提供连续的 2× 虚拟毫秒时钟。该功能不读取或改写注册表中的
+`GameSpeed`，目前同样没有 INI 或 GUI 入口。
 
 ## 原型边界
 
@@ -51,6 +56,17 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。
   最小化或正在移动和缩放时会
   临时解除，恢复操作后自动重新锁定；再次按 F12 则彻底解除。原作 F8 的地图卷动模式
   和 F10 的暂停快捷键保持不变。
+- Runtime 为 `HKCU\Software\KOEI\San9 Tc` 与 `HKCU\Software\KOEI\San9PK Tc` 两个
+  本作 profile 根提供进程内虚拟注册表。原作要求的 `Install\InstallInfo` 由当前
+  `San9PK.exe` 目录生成；两处 `Configs` 下的 DWORD 设置读取、修改和删除都映射到
+  启动器同目录的 `San9Toolkit.ini`，不要求用户预先创建游戏注册表键。
+  该隔离只覆盖本作用户配置；系统设备枚举、Windows 卸载信息及其他安装/授权检查继续
+  调用原生注册表 API。空 INI 时除 `FullScreen=0` 外均使用原作编译默认值。
+- 2× 加速只替换主游戏模块通过导入表调用的 `timeGetTime`。首次调用以真实毫秒值为锚点，
+  此后按相邻真实采样的无符号差值累加两倍，切入时不会产生时间跳变，也保留 WinMM
+  `DWORD` 计时回绕语义。Windows 系统时间、注册表 `GameSpeed`、音频设备时钟和其他进程
+  不受影响。本轮验收重点是地图单位移动、通用 motion 动画及原作等待循环是否约为 2×；
+  影片同步、所有事件演出和长时间运行仍需实机验证。
 - 启动器以窗口属性 `San9Toolkit.RuntimeStatus` 等待 DLL 完成安装；该属性只用于启动握手，
   不参与缩放或输入行为。
 
@@ -94,6 +110,42 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。
 ```
 
 显式目标 EXE 后面的参数会原样传给游戏。
+
+### 无 GUI 配置
+
+如需预设常用选项，在 `San9Toolkit.exe` 同目录创建 `San9Toolkit.ini`：
+
+```ini
+[Configs]
+FullScreen=0
+PlayBGM=1
+PlaySound=1
+PlayMovie=1
+MessageSpeed=1
+```
+
+布尔项使用 `0/1`。`MessageSpeed`、`GameSpeed`、`GameReport`、`GameReportDlg` 和
+`JumpList` 的原作有效范围为 `0..2`，`SvLdPage` 为 `0..7`；省略时使用原作默认值。
+游戏通过原接口保存设置时会写回此 INI。仓库中的 `San9Toolkit.ini.example` 可作模板。
+
+已由原作界面标签及按钮处理函数共同确认：`MessageSpeed` 为 `0=快`、`1=普通`、
+`2=暫停`；`GameReport` 对应界面“進行記錄”，为 `0=OFF`、`1=要約`、`2=詳細`。
+当前目标版本只加载、范围夹取和保存 `GameSpeed`，未发现运行时消费者；Toolkit 的 2×
+虚拟时钟不读取该项。`GameReportDlg` 和 `JumpList` 的三档标签仍待确认。
+
+已确认的 `Configs` 唯一键名共 22 个：
+
+| 类别 | 键名 |
+| --- | --- |
+| 常用选项 | `MessageSpeed`、`GameSpeed`、`GameReport`、`GameReportDlg`、`JumpList`、`FullScreen`、`PlayBGM`、`PlaySound`、`PlayMovie`、`SvLdPage` |
+| 原作维护的位置 | `YNPositionX`、`YNPositionY`、`KakuninPositionX`、`KakuninPositionY`、`AppPositionX`、`AppPositionY` |
+| 原作维护的位集合 | `FlagData`、`ArtData` |
+| 原作维护的试用剧情状态 | `TrialStory00`、`TrialStory01`、`TrialStoryEvent`、`TrialStoryClear` |
+
+空 INI 启动时不会主动补齐这些键；原作查询缺值后使用自身默认值，实际保存对应状态时才由
+Toolkit 写入。位置、位集合和剧情进度不作为用户开关，示例文件只用注释登记其名称。
+`FlagData` 是包含界面及地图行为等内容的通用打包标志，并非单纯的解锁数据；`ArtData`
+的逐位语义仍待确认。
 
 “单文件”指发布和分发只有一个 EXE。运行时会校验内嵌 DLL，再将其按内容哈希缓存到
 `%TEMP%\San9Toolkit\` 后调用 `LoadLibraryW` 注入；这避免实现手工 PE 映射器。游戏

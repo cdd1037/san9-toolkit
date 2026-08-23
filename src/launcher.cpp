@@ -22,6 +22,7 @@ constexpr std::array<unsigned char, 32> kSupportedSha256{
 constexpr char kWindowClass[] = "KOEI_SAN9WINDOW";
 constexpr char kStatusProperty[] = "San9Toolkit.RuntimeStatus";
 constexpr wchar_t kBootEventEnvironmentVariable[] = L"SAN9_TOOLKIT_BOOT_EVENT";
+constexpr wchar_t kConfigEnvironmentVariable[] = L"SAN9_TOOLKIT_CONFIG";
 constexpr std::array<char, 16> kPayloadMagic{
     'S', 'A', 'N', '9', 'T', 'O', 'O', 'L', 'K', 'I', 'T', 'D', 'L', 'L', '1', '\0',
 };
@@ -364,8 +365,11 @@ int wmain(int argc, wchar_t* argv[]) {
         L"Local\\San9Toolkit.Boot." + std::to_wstring(GetCurrentProcessId()) + L"." +
         std::to_wstring(GetTickCount64());
     Handle bootEvent(CreateEventW(nullptr, TRUE, FALSE, bootEventName.c_str()));
+    const std::wstring configPath =
+        (launcherPath.parent_path() / L"San9Toolkit.ini").wstring();
     if (!bootEvent || GetLastError() == ERROR_ALREADY_EXISTS ||
-        !SetEnvironmentVariableW(kBootEventEnvironmentVariable, bootEventName.c_str())) {
+        !SetEnvironmentVariableW(kBootEventEnvironmentVariable, bootEventName.c_str()) ||
+        !SetEnvironmentVariableW(kConfigEnvironmentVariable, configPath.c_str())) {
         return Fail(L"无法创建 Runtime 安装握手事件。" );
     }
 

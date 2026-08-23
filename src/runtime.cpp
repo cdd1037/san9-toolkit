@@ -4,6 +4,8 @@
 #include "code_hook.h"
 #include "cursor_lock.h"
 #include "d3d11_presenter.h"
+#include "import_hook.h"
+#include "registry_overlay.h"
 #include "viewport.h"
 
 #include <algorithm>
@@ -22,10 +24,26 @@ constexpr wchar_t kBootEventEnvironmentVariable[] = L"SAN9_TOOLKIT_BOOT_EVENT";
 constexpr UINT kRedrawMessage = WM_APP + 0x319;
 constexpr std::uintptr_t kNormalizeWindowMessageRva = 0x1CC0B0;
 constexpr std::size_t kNormalizeWindowMessagePrologueSize = 8;
+constexpr UINT kDefaultDpi = 96;
+
+struct RuntimeOptions {
+    bool scaleInitialWindowForSystemDpi;
+    bool accelerateGameClock;
+    DWORD gameClockRate;
+};
+
+constexpr RuntimeOptions kRuntimeOptions{
+    .scaleInitialWindowForSystemDpi = true,
+    .accelerateGameClock = true,
+    .gameClockRate = 2,
+};
+
+static_assert(kRuntimeOptions.gameClockRate >= 1);
 
 using BitBltFunction = BOOL(WINAPI*)(HDC, int, int, int, int, HDC, int, int, DWORD);
 using GetCursorPosFunction = BOOL(WINAPI*)(LPPOINT);
 using ReleaseDcFunction = int(WINAPI*)(HWND, HDC);
+using TimeGetTimeFunction = DWORD(WINAPI*)();
 using NormalizeWindowMessageFunction = int(__cdecl*)(MSG*, MSG*);
 
 HWND g_window = nullptr;
@@ -33,10 +51,15 @@ WNDPROC g_originalWindowProc = nullptr;
 BitBltFunction g_originalBitBlt = nullptr;
 GetCursorPosFunction g_originalGetCursorPos = nullptr;
 ReleaseDcFunction g_originalReleaseDc = nullptr;
+TimeGetTimeFunction g_originalTimeGetTime = nullptr;
 NormalizeWindowMessageFunction g_originalNormalizeWindowMessage = nullptr;
 HDC g_framebufferDc = nullptr;
 volatile LONG g_presentSerial = 0;
 volatile LONG g_windowBehaviorInstalled = 0;
+SRWLOCK g_gameClockLock = SRWLOCK_INIT;
+bool g_gameClockInitialized = false;
+DWORD g_lastRealGameTick = 0;
+DWORD g_scaledGameTick = 0;
 
 using Viewport = san9::viewport::Bounds;
 
@@ -68,6 +91,23 @@ bool IsTargetWindow(HWND window) {
 bool RenderWindow() {
     return IsLogicalFramebuffer(g_framebufferDc) &&
            san9::d3d11_presenter::PresentFrame(g_framebufferDc);
+}
+
+bool CalculateInitialOuterRect(HWND window, LONG_PTR style, LONG_PTR exStyle,
+                               RECT& outer) {
+    const UINT dpi = GetDpiForWindow(window);
+    if (dpi == 0) {
+        return false;
+    }
+    const int clientWidth = kRuntimeOptions.scaleInitialWindowForSystemDpi
+                                ? MulDiv(kLogicalWidth, static_cast<int>(dpi), kDefaultDpi)
+                                : kLogicalWidth;
+    const int clientHeight = kRuntimeOptions.scaleInitialWindowForSystemDpi
+                                 ? MulDiv(kLogicalHeight, static_cast<int>(dpi), kDefaultDpi)
+                                 : kLogicalHeight;
+    outer = {0, 0, clientWidth, clientHeight};
+    return AdjustWindowRectExForDpi(&outer, static_cast<DWORD>(style), FALSE,
+                                    static_cast<DWORD>(exStyle), dpi) != FALSE;
 }
 
 bool MapPhysicalPoint(HWND window, POINT physical, POINT& logical) {
@@ -279,59 +319,27 @@ int WINAPI ScaledReleaseDc(HWND window, HDC deviceContext) {
     return result;
 }
 
-template <typename Function>
-bool PatchImport(const char* importedModule, const char* importedFunction,
-                 Function replacement, Function& original) {
-    auto* module = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
-    if (!module) {
-        return false;
+DWORD WINAPI ScaledTimeGetTime() {
+    AcquireSRWLockExclusive(&g_gameClockLock);
+    const DWORD realTick = g_originalTimeGetTime();
+    if (!g_gameClockInitialized) {
+        g_lastRealGameTick = realTick;
+        g_scaledGameTick = realTick;
+        g_gameClockInitialized = true;
+    } else {
+        const DWORD elapsed = realTick - g_lastRealGameTick;
+        g_lastRealGameTick = realTick;
+        g_scaledGameTick += elapsed * kRuntimeOptions.gameClockRate;
     }
-    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
-        return false;
-    }
-    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(module + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-        return false;
-    }
-    const auto& imports = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    if (!imports.VirtualAddress) {
-        return false;
-    }
+    const DWORD result = g_scaledGameTick;
+    ReleaseSRWLockExclusive(&g_gameClockLock);
+    return result;
+}
 
-    auto* descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(module + imports.VirtualAddress);
-    for (; descriptor->Name; ++descriptor) {
-        const char* moduleName = reinterpret_cast<const char*>(module + descriptor->Name);
-        if (_stricmp(moduleName, importedModule) != 0) {
-            continue;
-        }
-        auto* names = reinterpret_cast<IMAGE_THUNK_DATA32*>(module + descriptor->OriginalFirstThunk);
-        auto* addresses = reinterpret_cast<IMAGE_THUNK_DATA32*>(module + descriptor->FirstThunk);
-        if (!descriptor->OriginalFirstThunk) {
-            return false;
-        }
-        for (; names->u1.AddressOfData; ++names, ++addresses) {
-            if (IMAGE_SNAP_BY_ORDINAL32(names->u1.Ordinal)) {
-                continue;
-            }
-            const auto* import = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(module + names->u1.AddressOfData);
-            if (std::strcmp(reinterpret_cast<const char*>(import->Name), importedFunction) != 0) {
-                continue;
-            }
-            DWORD oldProtection = 0;
-            if (!VirtualProtect(&addresses->u1.Function, sizeof(addresses->u1.Function), PAGE_READWRITE, &oldProtection)) {
-                return false;
-            }
-            original = reinterpret_cast<Function>(addresses->u1.Function);
-            InterlockedExchange(reinterpret_cast<volatile LONG*>(&addresses->u1.Function),
-                                reinterpret_cast<LONG>(replacement));
-            DWORD ignored = 0;
-            VirtualProtect(&addresses->u1.Function, sizeof(addresses->u1.Function), oldProtection, &ignored);
-            FlushInstructionCache(GetCurrentProcess(), &addresses->u1.Function, sizeof(addresses->u1.Function));
-            return true;
-        }
-    }
-    return false;
+bool InstallGameClock() {
+    return !kRuntimeOptions.accelerateGameClock ||
+           san9::import_hook::Install("winmm.dll", "timeGetTime", &ScaledTimeGetTime,
+                                      g_originalTimeGetTime);
 }
 
 bool PatchNormalizeWindowMessage() {
@@ -353,9 +361,13 @@ bool PatchNormalizeWindowMessage() {
 }
 
 bool PatchRequiredHooks() {
-    return PatchImport("gdi32.dll", "BitBlt", &ScaledBitBlt, g_originalBitBlt) &&
-           PatchImport("user32.dll", "GetCursorPos", &ScaledGetCursorPos, g_originalGetCursorPos) &&
-           PatchImport("user32.dll", "ReleaseDC", &ScaledReleaseDc, g_originalReleaseDc) &&
+    return san9::import_hook::Install("gdi32.dll", "BitBlt", &ScaledBitBlt, g_originalBitBlt) &&
+           san9::import_hook::Install("user32.dll", "GetCursorPos", &ScaledGetCursorPos,
+                                      g_originalGetCursorPos) &&
+           san9::import_hook::Install("user32.dll", "ReleaseDC", &ScaledReleaseDc,
+                                      g_originalReleaseDc) &&
+           san9::registry_overlay::Install() &&
+           InstallGameClock() &&
            PatchNormalizeWindowMessage();
 }
 
@@ -389,8 +401,8 @@ bool InstallWindowBehavior(HWND window) {
     if (SetWindowLongPtrA(window, GWL_STYLE, newStyle) == 0 && GetLastError() != ERROR_SUCCESS) {
         return false;
     }
-    RECT desired{0, 0, kLogicalWidth, kLogicalHeight};
-    if (!AdjustWindowRectEx(&desired, static_cast<DWORD>(newStyle), FALSE, static_cast<DWORD>(exStyle))) {
+    RECT desired{};
+    if (!CalculateInitialOuterRect(window, newStyle, exStyle, desired)) {
         return false;
     }
     if (!SetWindowPos(window, nullptr, outer.left, outer.top,
@@ -455,6 +467,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void* reserved) {
             CloseHandle(thread);
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
+        san9::registry_overlay::Shutdown();
         san9::cursor_lock::Shutdown();
         san9::d3d11_presenter::Shutdown();
     }
