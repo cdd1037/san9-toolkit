@@ -1,5 +1,8 @@
 name: Build
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [main]
@@ -40,3 +43,22 @@ jobs:
             dist/San9Toolkit-v*-windows.zip
             dist/San9Toolkit-v*-windows.zip.sha256
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          $expectedTag = "v$version"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+            throw "标签 $env:GITHUB_REF_NAME 与 VERSION $version 不一致。"
+          }
+          gh release create $env:GITHUB_REF_NAME `
+            "dist/San9Toolkit-v$version-windows.zip#San9 Toolkit $expectedTag Windows 玩家版" `
+            "dist/San9Toolkit-v$version-windows.zip.sha256#SHA-256 校验文件" `
+            --title "San9 Toolkit $expectedTag" `
+            --generate-notes `
+            --verify-tag `
+            --latest
