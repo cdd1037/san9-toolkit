@@ -73,10 +73,21 @@ cleanup:
     CloseHandle(file); return ok;
 }
 
-bool IsSupportedGame(const std::filesystem::path& path) {
+enum class GameValidationResult {
+    Supported,
+    InvalidFileName,
+    ReadFailed,
+    ContentMismatch,
+};
+
+GameValidationResult ValidateGame(const std::filesystem::path& path) {
+    if (path.filename() != L"San9PK.exe") return GameValidationResult::InvalidFileName;
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error)) return GameValidationResult::ReadFailed;
     std::array<unsigned char, 32> digest{};
-    return path.filename() == L"San9PK.exe" && std::filesystem::is_regular_file(path) &&
-           HashFile(path, digest) && digest == kSupportedSha256;
+    if (!HashFile(path, digest)) return GameValidationResult::ReadFailed;
+    return digest == kSupportedSha256 ? GameValidationResult::Supported
+                                      : GameValidationResult::ContentMismatch;
 }
 
 std::wstring KeyName(UINT key) {
@@ -91,6 +102,22 @@ std::wstring KeyName(UINT key) {
 void ShowError(const std::wstring& message) {
     const wchar_t* buttons[]{L"确定"};
     ui_msgbox(g_app.window, L"三国志 IX 工具箱", message.c_str(), buttons, 1, 0, 0, UI_MSGBOX_ICON_ERROR);
+}
+
+void ShowGameValidationError(GameValidationResult result) {
+    switch (result) {
+    case GameValidationResult::InvalidFileName:
+        ShowError(L"文件名不符合要求。请选择名称为 San9PK.exe 的游戏主程序。");
+        break;
+    case GameValidationResult::ContentMismatch:
+        ShowError(L"文件内容校验不一致。当前仅支持繁体中文版 1.0.1.0 的原始 San9PK.exe。");
+        break;
+    case GameValidationResult::ReadFailed:
+        ShowError(L"无法读取所选文件。请确认文件存在、未被其他程序占用，并检查访问权限后重试。");
+        break;
+    case GameValidationResult::Supported:
+        break;
+    }
 }
 
 std::filesystem::path SelectPath(bool folder) {
@@ -135,7 +162,8 @@ bool SaveSettings(bool toast) {
 
 void OnBrowseGame(UiWidget, void*) {
     const auto selected = SelectPath(false); if (selected.empty()) return;
-    if (!IsSupportedGame(selected)) { ShowError(L"请选择繁体中文版 1.0.1.0 的 San9PK.exe。目前只支持这个版本。"); return; }
+    const auto validation = ValidateGame(selected);
+    if (validation != GameValidationResult::Supported) { ShowGameValidationError(validation); return; }
     g_app.settings.gameExecutable = selected.wstring(); ui_text_input_set_text(g_app.gamePath, selected.c_str()); SaveSettings(false);
 }
 
@@ -170,7 +198,8 @@ DWORD WINAPI MonitorHelper(void* parameter) {
 void OnLaunch(UiWidget, void*) {
     if (!SaveSettings(false)) return;
     const std::filesystem::path game(g_app.settings.gameExecutable);
-    if (!IsSupportedGame(game)) { ShowError(L"找不到可用的 San9PK.exe，或者游戏版本不受支持。请重新选择游戏主程序。"); return; }
+    const auto validation = ValidateGame(game);
+    if (validation != GameValidationResult::Supported) { ShowGameValidationError(validation); return; }
     std::string encodedDocumentsRoot;
     if (!g_app.settings.documentsRoot.empty() &&
         !san9::documents_path::EncodeRoot(g_app.settings.documentsRoot, encodedDocumentsRoot)) {
@@ -288,7 +317,7 @@ void LoadDefaults() {
     g_app.settings = san9::toolkit_config::Load(g_app.configPath);
     if (g_app.settings.gameExecutable.empty()) {
         const auto candidate = g_app.root / L"San9PK.exe";
-        if (IsSupportedGame(candidate)) g_app.settings.gameExecutable = candidate.wstring();
+        if (ValidateGame(candidate) == GameValidationResult::Supported) g_app.settings.gameExecutable = candidate.wstring();
     }
     if (g_app.settings.documentsRoot.empty()) {
         PWSTR documents = nullptr;
