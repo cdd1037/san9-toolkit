@@ -25,6 +25,8 @@ constexpr std::array<const char*, 2> kProfileRoots{
 };
 constexpr char kInstallInfo[] = "installinfo";
 constexpr char kFullScreen[] = "fullscreen";
+constexpr char kAppPositionX[] = "apppositionx";
+constexpr char kAppPositionY[] = "apppositiony";
 constexpr wchar_t kConfigEnvironmentVariable[] = L"SAN9_TOOLKIT_CONFIG";
 constexpr wchar_t kConfigSection[] = L"Configs";
 
@@ -138,6 +140,14 @@ bool IsProfileSection(const std::string& path, const char* section) {
         }
     }
     return false;
+}
+
+bool IsMainWindowPosition(const std::string& path, LPCSTR valueName) {
+    if (!IsProfileSection(path, "configs")) {
+        return false;
+    }
+    const std::string name = Canonicalize(valueName);
+    return name == kAppPositionX || name == kAppPositionY;
 }
 
 VirtualKey* FindVirtualKey(HKEY key) {
@@ -335,6 +345,10 @@ LSTATUS WINAPI OverlayRegQueryValueExA(HKEY key, LPCSTR valueName, LPDWORD reser
         ReleaseSRWLockExclusive(&g_lock);
         return status;
     }
+    if (IsMainWindowPosition(virtualKey->path, valueName)) {
+        ReleaseSRWLockExclusive(&g_lock);
+        return ERROR_FILE_NOT_FOUND;
+    }
 
     const auto stored = g_values.find(ValueId(virtualKey->path, valueName));
     if (stored != g_values.end()) {
@@ -388,6 +402,10 @@ LSTATUS WINAPI OverlayRegSetValueExA(HKEY key, LPCSTR valueName, DWORD reserved,
     if (!valueName || (!data && dataSize != 0)) {
         ReleaseSRWLockExclusive(&g_lock);
         return ERROR_INVALID_PARAMETER;
+    }
+    if (IsMainWindowPosition(virtualKey->path, valueName)) {
+        ReleaseSRWLockExclusive(&g_lock);
+        return ERROR_SUCCESS;
     }
     StoredValue stored;
     stored.type = type;

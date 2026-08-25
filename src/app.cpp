@@ -149,7 +149,7 @@ void PullControls() {
     g_app.settings.playSound = ui_toggle_get_on(g_app.playSound) != 0;
     g_app.settings.playMovie = ui_toggle_get_on(g_app.playMovie) != 0;
     g_app.settings.scaleInitialWindowForSystemDpi = ui_toggle_get_on(g_app.dpiScale) != 0;
-    g_app.settings.borderlessWindow = ui_toggle_get_on(g_app.borderless) != 0;
+    g_app.settings.borderlessFullscreen = ui_toggle_get_on(g_app.borderless) != 0;
     g_app.settings.gameSpeedMultiplier = static_cast<DWORD>(ui_combobox_get_selected(g_app.speed) + 1);
 }
 
@@ -174,6 +174,10 @@ void OnBrowseDocuments(UiWidget, void*) {
 
 void OnCaptureKey(UiWidget, void*) {
     g_app.capturingKey = true; ui_label_set_text(g_app.hotkeyLabel, L"请按下一个按键…");
+}
+
+void OnBorderlessFullscreenChanged(UiWidget, int enabled, void*) {
+    ui_widget_set_enabled(g_app.dpiScale, enabled == 0);
 }
 
 void OnKey(UiWindow, int key, void*) {
@@ -306,6 +310,7 @@ bool BindLayout() {
     ui_widget_on_click(captureKey, OnCaptureKey, nullptr);
     ui_widget_on_click(save, OnSave, nullptr);
     ui_widget_on_click(g_app.launch, OnLaunch, nullptr);
+    ui_toggle_on_changed(g_app.borderless, OnBorderlessFullscreenChanged, nullptr);
     for (std::size_t index = 0; index < g_app.navigation.size(); ++index) {
         ui_widget_on_click(g_app.navigation[index], OnNavigate, reinterpret_cast<void*>(index));
     }
@@ -338,7 +343,8 @@ void PopulateControls() {
                              static_cast<int>(g_app.settings.edgeScrollMode));
     ui_toggle_set_on_immediate(g_app.playBgm, g_app.settings.playBgm); ui_toggle_set_on_immediate(g_app.playSound, g_app.settings.playSound);
     ui_toggle_set_on_immediate(g_app.playMovie, g_app.settings.playMovie); ui_toggle_set_on_immediate(g_app.dpiScale, g_app.settings.scaleInitialWindowForSystemDpi);
-    ui_toggle_set_on_immediate(g_app.borderless, g_app.settings.borderlessWindow);
+    ui_toggle_set_on_immediate(g_app.borderless, g_app.settings.borderlessFullscreen);
+    ui_widget_set_enabled(g_app.dpiScale, !g_app.settings.borderlessFullscreen);
     ui_combobox_set_selected(g_app.speed, static_cast<int>(g_app.settings.gameSpeedMultiplier - 1));
 }
 

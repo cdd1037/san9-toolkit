@@ -24,7 +24,7 @@
 DLL 通过窗口属性报告安装成功；失败或超时不会留下一个未缩放的测试进程继续运行。
 启动器还会在目标主线程恢复和 DLL 注入之前，将目标进程设为 system-DPI-aware，避免
 GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。GUI 可配置初始 DPI 缩放、窗口标题、
-固定尺寸无边框、鼠标锁定键以及 1x～4x 虚拟游戏时钟。加速不读取或改写注册表
+无边框全屏、鼠标锁定键以及 1x～4x 虚拟游戏时钟。加速不读取或改写注册表
 `GameSpeed`。
 
 ## 功能与边界
@@ -34,7 +34,15 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。GUI 可配置初始 D
   `三國志ⅨPK`，并调用宽字符窗口 API；不依赖机器的系统 ANSI 代码页。
 - DLL 先挂钩呈现入口，等目标类窗口首次提交已确认的游戏后缓冲后，才将该窗口改成标准
   可缩放窗口；这避免误改启动阶段短暂出现的同类窗口。`WM_SIZING` 保持客户区 4:3。
-- 最大化到非 4:3 屏幕时使用居中黑边。
+- 有边框窗口最大化时仍处于 Windows 原生最大化状态，但客户区限制为工作区内水平居中、
+  底部贴齐的最大整数 4:3；取整余量留在上方，窗口外侧保留桌面，不在客户区内补黑边。
+- 无边框全屏隐藏标题栏和边框，在上次使用的显示器工作区内采用同一最大 4:3 底部贴齐几何，
+  不覆盖任务栏。该模式不读取或覆盖已保存的普通窗口位置、尺寸和最大化状态；关闭后
+  恢复先前的有边框窗口 placement。“自动调整窗口大小”在此模式下不参与尺寸计算。
+- Toolkit 独占主窗口几何状态：以 96-DPI 逻辑单位保存正常窗口相对显示器工作区的位置、
+  客户区宽度和最大化状态，高度由 4:3 推导。重启时优先恢复到原显示器；显示器缺失或
+  工作区缩小时回退到当前主显示器并把完整窗口约束在可见工作区内。最小化不会覆盖正常
+  窗口状态。原作 `AppPositionX/Y` 的读取按缺失处理、写入仅确认成功而不再持久化。
 - DLL 钩住主模块导入表中的 `BitBlt`，只接受选中 1024×768×16 位 `BI_RGB` DIB 的
   内存 DC。确认原作提交后，把 DIB 的 X1R5G5B5 原始行直接复制到
   `B5G5R5A1_UNORM` 动态纹理，由 D3D11 全屏三角形和单 Pass Catmull–Rom shader 完成
@@ -51,7 +59,8 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。GUI 可配置初始 D
 - 原作通过 `GetCursorPos` 主动轮询 hover 时，也返回与其无边框窗口坐标约定一致的逻辑
   位置。窗口子类不再改写鼠标消息，消息流和轮询流各自在唯一入口完成一次变换。
 - 原作仍可发出整帧或局部脏矩形提交，但 D3D11 presenter 每次都从已确认后缓冲上传并
-  呈现完整画布；render target 先清为黑色，再只在居中 4:3 viewport 绘制游戏纹理。
+  呈现完整画布；普通缩放窗口的 render target 先清为黑色，再只在居中 4:3 viewport
+  绘制游戏纹理。最大化与无边框全屏的客户区本身严格为 4:3，viewport 覆盖整个客户区。
   安装后其他来源到主客户区的 `BitBlt` 被抑制，避免 GDI 和 DXGI 交替覆盖。
 - 默认按 F12（可在 GUI 中改绑单个键）切换鼠标锁定；按下后由鼠标穿透、不可激活的透明覆盖窗口在画面中央短暂显示
   “鼠标已锁定在游戏画面内”或“鼠标锁定已解除”。覆盖窗口不参与原作逐帧 GDI 提交，
@@ -134,7 +143,7 @@ DocumentsRoot=D:\Games\San9Documents
 CursorLockVirtualKey=123
 ScaleInitialWindowForSystemDpi=1
 WindowTitle=三國志ⅨPK
-BorderlessWindow=0
+BorderlessFullscreen=0
 GameSpeedMultiplier=2
 
 [Configs]
@@ -168,17 +177,25 @@ WMV3/MP3 文件，XAudio2 提供独立于游戏倍率的音频主时钟，画面
 交换链。播放期间左键释放或 Esc 可跳过；失焦、最小化时暂停。格式或解码失败会恢复游戏
 画面并提示“影片无法播放，已跳过”，不会回退到旧式影片窗口。
 
+每次开始播放影片时，Toolkit 会在配置文件同目录创建 `San9Toolkit.movie.log`，记录解码
+进度、音视频队列、音频时钟、最后呈现帧和结束条件，并至少每秒强制刷盘一次。若游戏在
+影片期间卡住或被强制结束，请保留该文件用于诊断。下一次影片开始时，旧记录会轮换为
+`San9Toolkit.movie.previous.log`；单个记录文件最大 1 MiB，不包含影片完整路径或媒体内容。
+
 已确认的 `Configs` 唯一键名共 22 个：
 
 | 类别 | 键名 |
 | --- | --- |
 | 常用选项 | `MessageSpeed`、`GameSpeed`、`GameReport`、`GameReportDlg`、`JumpList`、`FullScreen`、`PlayBGM`、`PlaySound`、`PlayMovie`、`SvLdPage` |
-| 原作维护的位置 | `YNPositionX`、`YNPositionY`、`KakuninPositionX`、`KakuninPositionY`、`AppPositionX`、`AppPositionY` |
+| 原作维护的对话框位置 | `YNPositionX`、`YNPositionY`、`KakuninPositionX`、`KakuninPositionY` |
+| Toolkit 接管、原作不再持久化 | `AppPositionX`、`AppPositionY` |
 | 原作维护的位集合 | `FlagData`、`ArtData` |
 | 原作维护的试用剧情状态 | `TrialStory00`、`TrialStory01`、`TrialStoryEvent`、`TrialStoryClear` |
 
-空 INI 启动时不会主动补齐这些键；原作查询缺值后使用自身默认值，实际保存对应状态时才由
-Toolkit 写入。位置、`ArtData` 和剧情进度不作为用户开关，示例文件只用注释登记其名称。
+空 INI 启动时不会主动补齐这些原作键；原作查询缺值后使用自身默认值，实际保存对应状态时
+才由 Toolkit 写入。对话框位置、`ArtData` 和剧情进度不作为用户开关，示例文件只用注释
+登记其名称。主窗口状态由 `[WindowState]` 的单一版本化 `Placement` 值维护，删除该值即可
+恢复默认几何。
 `FlagData` 是包含界面及地图行为等内容的通用打包标志，并非单纯的解锁数据；GUI 仅暴露
 已确认的地图滚动位，保存时保留其他位。`ArtData` 的逐位语义仍待确认。
 

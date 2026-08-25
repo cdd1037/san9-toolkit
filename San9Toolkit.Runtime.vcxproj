@@ -28,10 +28,12 @@
     <ClCompile Include="src\d3d11_presenter.cpp" />
     <ClCompile Include="src\documents_overlay.cpp" />
     <ClCompile Include="src\movie_player.cpp" />
+    <ClCompile Include="src\movie_trace.cpp" />
     <ClCompile Include="src\registry_overlay.cpp" />
     <ClCompile Include="src\runtime.cpp" />
     <ClCompile Include="src\status_overlay.cpp" />
     <ClCompile Include="src\viewport.cpp" />
+    <ClCompile Include="src\window_placement.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\code_hook.h" />
@@ -42,10 +44,12 @@
     <ClInclude Include="src\import_hook.h" />
     <ClInclude Include="src\movie_player.h" />
     <ClInclude Include="src\movie_state.h" />
+    <ClInclude Include="src\movie_trace.h" />
     <ClInclude Include="src\registry_overlay.h" />
     <ClInclude Include="src\status_overlay.h" />
     <ClInclude Include="src\toolkit_config.h" />
     <ClInclude Include="src\viewport.h" />
+    <ClInclude Include="src\window_placement.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

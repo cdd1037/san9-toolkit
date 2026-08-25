@@ -150,11 +150,11 @@
                 <label id="hotkeyLabel" class="hotkey-value">F12</label><button id="captureKey" class="hotkey-button">更改按键</button>
               </div>
               <div class="row">
-                <div class="row-copy"><label class="row-title">自动调整窗口大小</label><small class="row-help">按 Windows 显示比例放大窗口</small></div>
+                <div class="row-copy"><label class="row-title">自动调整窗口大小</label><small class="row-help">按 Windows 显示比例放大普通窗口</small></div>
                 <div class="control-slot"><Toggle id="dpiScale"></Toggle></div>
               </div>
               <div class="row">
-                <div class="row-copy"><label class="row-title">无边框窗口</label><small class="row-help">隐藏标题栏和边框，窗口大小保持不变</small></div>
+                <div class="row-copy"><label class="row-title">无边框全屏</label><small class="row-help">在工作区内以最大 4:3 画面显示，不覆盖任务栏</small></div>
                 <div class="control-slot"><Toggle id="borderless"></Toggle></div>
               </div>
               <div class="row">
@@ -202,7 +202,7 @@
               </div>
               <div class="about-item">
                 <label class="about-title">使用现代画面输出</label>
-                <p class="about-copy">通过 D3D11 重新呈现游戏画面，为高分屏缩放、无边框窗口等功能提供基础。</p>
+                <p class="about-copy">通过 D3D11 重新呈现游戏画面，为高分屏缩放、无边框全屏等功能提供基础。</p>
               </div>
               <div class="about-item">
                 <label class="about-title">提供可调游戏速度</label>

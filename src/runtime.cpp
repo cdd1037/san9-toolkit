@@ -10,11 +10,13 @@
 #include "registry_overlay.h"
 #include "toolkit_config.h"
 #include "viewport.h"
+#include "window_placement.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 
 namespace {
 
@@ -49,6 +51,7 @@ bool g_gameClockInitialized = false;
 DWORD g_lastRealGameTick = 0;
 DWORD g_scaledGameTick = 0;
 san9::toolkit_config::Settings g_settings;
+std::filesystem::path g_configPath;
 
 using Viewport = san9::viewport::Bounds;
 
@@ -84,21 +87,18 @@ bool RenderWindow() {
                   san9::d3d11_presenter::PresentFrame(g_framebufferDc));
 }
 
-bool CalculateInitialOuterRect(HWND window, LONG_PTR style, LONG_PTR exStyle,
-                               RECT& outer) {
+bool CalculateDefaultInitialClientSize(HWND window, SIZE& size) {
     const UINT dpi = GetDpiForWindow(window);
     if (dpi == 0) {
         return false;
     }
-    const int clientWidth = g_settings.scaleInitialWindowForSystemDpi
-                                ? MulDiv(kLogicalWidth, static_cast<int>(dpi), kDefaultDpi)
-                                : kLogicalWidth;
-    const int clientHeight = g_settings.scaleInitialWindowForSystemDpi
-                                 ? MulDiv(kLogicalHeight, static_cast<int>(dpi), kDefaultDpi)
-                                 : kLogicalHeight;
-    outer = {0, 0, clientWidth, clientHeight};
-    return AdjustWindowRectExForDpi(&outer, static_cast<DWORD>(style), FALSE,
-                                    static_cast<DWORD>(exStyle), dpi) != FALSE;
+    size.cx = g_settings.scaleInitialWindowForSystemDpi
+                  ? MulDiv(kLogicalWidth, static_cast<int>(dpi), kDefaultDpi)
+                  : kLogicalWidth;
+    size.cy = g_settings.scaleInitialWindowForSystemDpi
+                  ? MulDiv(kLogicalHeight, static_cast<int>(dpi), kDefaultDpi)
+                  : kLogicalHeight;
+    return true;
 }
 
 bool MapPhysicalPoint(HWND window, POINT physical, POINT& logical) {
@@ -242,12 +242,20 @@ void EnforceFourByThree(HWND window, WPARAM edge, RECT& outer) {
 
 LRESULT CALLBACK ScalerWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     san9::movie_player::HandleWindowMessage(window, message, wParam, lParam);
+    san9::window_placement::HandleWindowMessageBefore(window, message);
     if (san9::cursor_lock::HandleWindowMessageBefore(window, message, wParam, lParam)) {
         return 0;
     }
     if (message == WM_SIZING) {
         EnforceFourByThree(window, wParam, *reinterpret_cast<RECT*>(lParam));
         return TRUE;
+    }
+    if (message == WM_GETMINMAXINFO) {
+        const LRESULT result = CallWindowProcA(g_originalWindowProc, window, message,
+                                               wParam, lParam);
+        san9::window_placement::HandleGetMinMaxInfo(
+            window, *reinterpret_cast<MINMAXINFO*>(lParam));
+        return result;
     }
     if (message == WM_ERASEBKGND) {
         return TRUE;
@@ -266,6 +274,7 @@ LRESULT CALLBACK ScalerWindowProc(HWND window, UINT message, WPARAM wParam, LPAR
     } else if (message == WM_SIZE) {
         InvalidateRect(window, nullptr, FALSE);
     }
+    san9::window_placement::HandleWindowMessageAfter(window, message, wParam);
     san9::cursor_lock::HandleWindowMessageAfter(window, message);
     return result;
 }
@@ -360,7 +369,7 @@ bool PatchRequiredHooks() {
                                       g_originalReleaseDc) &&
            san9::documents_overlay::Install(g_settings.documentsRoot) &&
            san9::registry_overlay::Install() &&
-           san9::movie_player::Install() &&
+           san9::movie_player::Install(g_configPath) &&
            InstallGameClock() &&
            PatchNormalizeWindowMessage();
 }
@@ -389,32 +398,29 @@ bool LoadSettings() {
     if (length == 0 || length >= path.size()) {
         return false;
     }
-    g_settings = san9::toolkit_config::Load(path.data());
+    g_configPath = path.data();
+    g_settings = san9::toolkit_config::Load(g_configPath);
     return true;
 }
 
 bool InstallWindowBehavior(HWND window) {
-    RECT outer{};
-    if (!GetWindowRect(window, &outer)) {
-        return false;
-    }
-
     const LONG_PTR oldStyle = GetWindowLongPtrA(window, GWL_STYLE);
-    const LONG_PTR exStyle = GetWindowLongPtrA(window, GWL_EXSTYLE);
-    const LONG_PTR newStyle = g_settings.borderlessWindow
+    const LONG_PTR newStyle = g_settings.borderlessFullscreen
                                   ? ((oldStyle & ~static_cast<LONG_PTR>(WS_OVERLAPPEDWINDOW)) | WS_POPUP)
                                   : ((oldStyle & ~static_cast<LONG_PTR>(WS_POPUP)) | WS_OVERLAPPEDWINDOW);
     SetLastError(ERROR_SUCCESS);
     if (SetWindowLongPtrA(window, GWL_STYLE, newStyle) == 0 && GetLastError() != ERROR_SUCCESS) {
         return false;
     }
-    RECT desired{};
-    if (!CalculateInitialOuterRect(window, newStyle, exStyle, desired)) {
+    SIZE defaultClient{};
+    if (!CalculateDefaultInitialClientSize(window, defaultClient)) {
         return false;
     }
-    if (!SetWindowPos(window, nullptr, outer.left, outer.top,
-                      desired.right - desired.left, desired.bottom - desired.top,
-                      SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED)) {
+    bool shouldMaximize = false;
+    if (!san9::window_placement::Restore(window, g_configPath,
+                                         defaultClient.cx, defaultClient.cy,
+                                         g_settings.borderlessFullscreen,
+                                         shouldMaximize)) {
         return false;
     }
     g_originalWindowProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrA(
@@ -429,6 +435,10 @@ bool InstallWindowBehavior(HWND window) {
         return false;
     }
     san9::cursor_lock::Initialize(window, g_settings.cursorLockVirtualKey);
+    san9::window_placement::StartTracking(window);
+    if (shouldMaximize) {
+        ShowWindow(window, SW_MAXIMIZE);
+    }
     return true;
 }
 
@@ -474,6 +484,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void* reserved) {
             CloseHandle(thread);
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
+        san9::window_placement::Shutdown();
         san9::movie_player::Shutdown();
         san9::registry_overlay::Shutdown();
         san9::cursor_lock::Shutdown();

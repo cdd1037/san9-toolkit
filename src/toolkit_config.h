@@ -34,7 +34,7 @@ struct Settings {
     UINT cursorLockVirtualKey = VK_F12;
     bool scaleInitialWindowForSystemDpi = true;
     std::wstring windowTitle = L"三國志ⅨPK";
-    bool borderlessWindow = false;
+    bool borderlessFullscreen = false;
     DWORD gameSpeedMultiplier = 2;
     DWORD messageSpeed = 1;
     DWORD gameReport = 1;
@@ -77,7 +77,8 @@ inline Settings Load(const std::filesystem::path& path) {
     if (result.windowTitle.empty()) {
         result.windowTitle = L"三國志ⅨPK";
     }
-    result.borderlessWindow = ReadDword(path, L"Toolkit", L"BorderlessWindow", 0, 0, 1) != 0;
+    result.borderlessFullscreen =
+        ReadDword(path, L"Toolkit", L"BorderlessFullscreen", 0, 0, 1) != 0;
     result.gameSpeedMultiplier = ReadDword(path, L"Toolkit", L"GameSpeedMultiplier", 2, 1, 4);
     result.messageSpeed = ReadDword(path, L"Configs", L"MessageSpeed", 1, 0, 2);
     result.gameReport = ReadDword(path, L"Configs", L"GameReport", 1, 0, 2);
@@ -109,7 +110,7 @@ inline bool Save(const std::filesystem::path& path, const Settings& value) {
         WriteValue(path, L"Toolkit", L"CursorLockVirtualKey", number(value.cursorLockVirtualKey)) &&
         WriteValue(path, L"Toolkit", L"ScaleInitialWindowForSystemDpi", number(value.scaleInitialWindowForSystemDpi)) &&
         WriteValue(path, L"Toolkit", L"WindowTitle", value.windowTitle.empty() ? L"三國志ⅨPK" : value.windowTitle) &&
-        WriteValue(path, L"Toolkit", L"BorderlessWindow", number(value.borderlessWindow)) &&
+        WriteValue(path, L"Toolkit", L"BorderlessFullscreen", number(value.borderlessFullscreen)) &&
         WriteValue(path, L"Toolkit", L"GameSpeedMultiplier", number(value.gameSpeedMultiplier)) &&
         WriteValue(path, L"Configs", L"MessageSpeed", number(value.messageSpeed)) &&
         WriteValue(path, L"Configs", L"GameReport", number(value.gameReport)) &&
