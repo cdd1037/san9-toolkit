@@ -104,6 +104,43 @@ void ShowError(const std::wstring& message) {
     ui_msgbox(g_app.window, L"三国志 IX 工具箱", message.c_str(), buttons, 1, 0, 0, UI_MSGBOX_ICON_ERROR);
 }
 
+std::wstring DescribeLaunchFailure(DWORD code) {
+    const std::wstring suffix = L"\n\n问题代码：" + std::to_wstring(code);
+    switch (code) {
+    case 10:
+        return L"启动组件无法读取内部启动参数。请完整解压工具箱后重试。" + suffix;
+    case 11:
+        return L"启动组件找不到有效的 San9PK.exe。请在工具箱中重新选择游戏主程序。" + suffix;
+    case 12:
+        return L"游戏主程序内容与当前支持的繁体中文版 1.0.1.0 不一致。请不要使用修改版或损坏的 San9PK.exe。" + suffix;
+    case 13:
+        return L"启动组件无法确定自身所在目录。请把工具箱完整解压到本地磁盘后重试。" + suffix;
+    case 14:
+        return L"缺少 bin\\x86\\San9Toolkit.Runtime.dll。工具箱文件不完整，请重新解压完整程序包。" + suffix;
+    case 15:
+        return L"启动组件无法建立与 Runtime 的初始化通道。请重试；若问题持续，请检查安全软件是否限制了本地进程通信。" + suffix;
+    case 16:
+        return L"Windows 无法创建游戏进程。请检查 San9PK.exe 的访问权限以及安全软件拦截记录。" + suffix;
+    case 17:
+        return L"无法为游戏进程配置 DPI 模式。请检查 Windows 兼容性设置或进程防护策略。" + suffix;
+    case 18:
+        return L"无法把 Runtime 加载路径写入游戏进程。安全软件或 Windows Exploit Protection 可能阻止了进程操作。" + suffix;
+    case 19:
+        return L"游戏版本校验已通过，但 Runtime 未能注入、加载或在 10 秒内完成初始化。\n\n"
+               L"请确认工具箱已完整解压，检查 Defender 或其他安全软件的拦截记录。若使用 Windows N 或精简版系统，请确认已安装 Media Feature Pack。反馈时请附上 Windows 版本、系统版本号和本问题代码。" + suffix;
+    case 20:
+        return L"Runtime 已完成初始化，但游戏主线程无法恢复运行。请检查安全软件或进程防护策略。" + suffix;
+    case 21:
+        return L"游戏在工具箱完成接管前已经退出。请检查游戏自身是否能够正常启动，以及安全软件的拦截记录。" + suffix;
+    case 22:
+        return L"Runtime 已加载，但无法安装游戏窗口处理。请恢复默认兼容性设置后重试。" + suffix;
+    case 23:
+        return L"Runtime 已加载，但未能在等待时间内确认游戏窗口和画面缓冲。请确认游戏使用窗口模式，并检查是否有其他窗口或分辨率补丁冲突。" + suffix;
+    default:
+        return L"游戏启动过程中发生未识别的错误。反馈时请附上 Windows 版本、系统版本号和本问题代码。" + suffix;
+    }
+}
+
 void ShowGameValidationError(GameValidationResult result) {
     switch (result) {
     case GameValidationResult::InvalidFileName:
@@ -256,7 +293,7 @@ LRESULT CALLBACK WindowSubclass(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         ui_toggle_set_on(g_app.playBgm, g_app.settings.playBgm); ui_toggle_set_on(g_app.playSound, g_app.settings.playSound);
         ui_toggle_set_on(g_app.playMovie, g_app.settings.playMovie); ui_widget_set_enabled(g_app.launch, 1);
         ui_window_show_immediate(g_app.window); SetForegroundWindow(hwnd);
-        if (wParam != 0) ShowError(L"游戏未能启动。请检查游戏文件是否完整，然后重试。\n\n问题代码：" + std::to_wstring(wParam));
+        if (wParam != 0) ShowError(DescribeLaunchFailure(static_cast<DWORD>(wParam)));
         return 0;
     }
     return CallWindowProcW(g_originalWindowProc, hwnd, message, wParam, lParam);
