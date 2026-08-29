@@ -112,7 +112,8 @@ Core UI 的官方构建。下载该版本的 Windows x64 SDK 后，可将 `core-
 ./package.ps1 -CoreUiRoot C:\SDK\core-ui-v1.7.0
 ```
 
-图形程序使用 x64，Bootstrap 和 Runtime 使用 Win32。发布根目录只有用户入口
+图形程序使用 x64，Bootstrap 和 Runtime 使用 Win32；Runtime 静态链接 MSVC 运行库，
+不要求玩家另行安装 x86 Visual C++ Redistributable。发布根目录只有用户入口
 `San9Toolkit.exe`；`core-ui.dll` 位于 `bin\x64`，无窗口 Bootstrap 和 Runtime 位于
 `bin\x86`。界面结构和样式由发布目录中的 `ui\app.uix` 定义，程序启动时直接读取该文件；
 修改 UIX 后无需重新编译。缺少或无法解析 UIX 时程序会明确启动失败，不使用内嵌回退。
