@@ -12,7 +12,7 @@ $buildEnvironment = Get-San9BuildEnvironment
 $msbuild = $buildEnvironment.MsBuild
 $platformToolset = $buildEnvironment.PlatformToolset
 $coreUiRootPath = if ([string]::IsNullOrWhiteSpace($CoreUiRoot)) {
-    [IO.Path]::GetFullPath((Join-Path $toolkitRoot '..\core-ui-v1.7.0'))
+    [IO.Path]::GetFullPath((Join-Path $toolkitRoot '..\core-ui-v1.8.0'))
 } else {
     [IO.Path]::GetFullPath($CoreUiRoot)
 }

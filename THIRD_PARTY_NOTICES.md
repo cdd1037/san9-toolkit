@@ -5,9 +5,9 @@ San9 Toolkit 自身代码的授权状态。
 
 ## Core UI
 
-- 使用版本：`v1.7.0-cdd.1`（基于 Core UI 1.7.0 build 253 的 fork 构建）
-- Fork：https://github.com/cdd1037/core-ui
+- 使用版本：`v1.8.0`（上游 Core UI build 294，叠加本项目两处修复）
 - 上游：https://github.com/ghboke/core-ui
+- 对齐分支：`codex/align-v1.8`
 - 许可证：MIT
 
 ```text

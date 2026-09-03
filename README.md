@@ -89,15 +89,15 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。GUI 可配置初始 D
 
 ## 构建
 
-GUI 依赖 [cdd1037/core-ui](https://github.com/cdd1037/core-ui) fork 的
-[`v1.7.0-cdd.1`](https://github.com/cdd1037/core-ui/releases/tag/v1.7.0-cdd.1)，不是上游
-Core UI 的官方构建。下载该版本的 Windows x64 SDK 后，可将 `core-ui-v1.7.0` 放在本仓库
+GUI 依赖上游 [ghboke/core-ui](https://github.com/ghboke/core-ui) 的
+[`v1.8.0`](https://github.com/ghboke/core-ui/releases/tag/v1.8.0)，并在该版本上保留本项目所需的
+两处修复（ScrollView padding 视口和 `.uix` 原生导航控件）。下载对应的 Windows x64 SDK 后，可将 `core-ui-v1.8.0` 放在本仓库
 同级目录，或通过参数明确指定 SDK 路径。构建需要安装带 C++ 桌面工具链的 Visual Studio
 和 Windows 10 SDK。
 
 ```powershell
 ./build.ps1
-./build.ps1 -CoreUiRoot C:\SDK\core-ui-v1.7.0
+./build.ps1 -CoreUiRoot C:\SDK\core-ui-v1.8.0
 ```
 
 测试使用独立入口，不会读取游戏、影片或其他原版资源：
@@ -109,7 +109,7 @@ Core UI 的官方构建。下载该版本的 Windows x64 SDK 后，可将 `core-
 生成可发布 ZIP 和 SHA-256 校验文件：
 
 ```powershell
-./package.ps1 -CoreUiRoot C:\SDK\core-ui-v1.7.0
+./package.ps1 -CoreUiRoot C:\SDK\core-ui-v1.8.0
 ```
 
 图形程序使用 x64，Bootstrap 和 Runtime 使用 Win32；Runtime 静态链接 MSVC 运行库，
