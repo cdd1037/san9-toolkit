@@ -89,6 +89,13 @@ GDI 缩放结果再被 Windows DPI 虚拟化二次缩放。GUI 可配置初始 D
 
 ## 构建
 
+头像 PNG 绕过原作 256 色调色板的研究性 RGB555 方案、地址边界、裁剪规则和已知透明限制，见
+[`docs/portrait-palette-bypass.md`](docs/portrait-palette-bypass.md)。该原型目前只覆盖头像 ID 9 的
+L 头像及调色板变体 0，不是已完成的通用头像功能；配套实现仅保存在实验分支
+`codex/portrait-palette-bypass`，不属于主分支产品代码。
+供不了解本项目的外部开发者单独阅读和转发的完整实验指南，见
+[`docs/san9-png-portrait-hook-standalone.md`](docs/san9-png-portrait-hook-standalone.md)。
+
 GUI 依赖上游 [ghboke/core-ui](https://github.com/ghboke/core-ui) 的
 [`v1.8.0`](https://github.com/ghboke/core-ui/releases/tag/v1.8.0)，并在该版本上保留本项目所需的
 两处修复（ScrollView padding 视口和 `.uix` 原生导航控件）。下载对应的 Windows x64 SDK 后，可将 `core-ui-v1.8.0` 放在本仓库
