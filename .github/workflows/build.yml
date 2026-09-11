@@ -16,16 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download Core UI fork SDK
+      - name: Build Core UI SDK
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'core-ui.zip'
-          $sdkParent = Join-Path $env:RUNNER_TEMP 'core-ui-sdk'
-          Invoke-WebRequest `
-            -Uri 'https://github.com/cdd1037/core-ui/releases/download/v1.7.0-cdd.1/core-ui-v1.7.0-cdd.1-windows-x64.zip' `
-            -OutFile $archive
-          Expand-Archive -LiteralPath $archive -DestinationPath $sdkParent
-          "CORE_UI_ROOT=$sdkParent\core-ui-v1.7.0" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $source = Join-Path $PWD 'third_party\core-ui-v1.8.0'
+          $sdk = Join-Path $PWD 'third_party\core-ui-sdk-v1.8.0'
+          $build = Join-Path $env:RUNNER_TEMP 'core-ui-build'
+          git clone --depth 1 --branch codex/align-v1.8 `
+            https://github.com/cdd1037/core-ui.git $source
+          cmake -S $source -B $build -G 'Visual Studio 17 2022' -A x64 `
+            -DUI_CORE_BUILD_STATIC_ARCHIVE=ON
+          cmake --build $build --config Release --target release-package --parallel
+          Move-Item -LiteralPath (Join-Path $source 'release\core-ui-v1.8.0') -Destination $sdk
+          "CORE_UI_ROOT=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Test
         shell: pwsh

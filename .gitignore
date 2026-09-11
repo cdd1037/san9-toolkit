@@ -2,6 +2,8 @@
 /dist/
 /Release/
 /.vs/
+/third_party/*
+!/third_party/README.md
 *.user
 *.suo
 *.pdb
