@@ -16,30 +16,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build Core UI 1.8 with static CRT
+      - name: Download Core UI 1.8 static CRT SDK
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $source = Join-Path $env:RUNNER_TEMP 'core-ui-src'
-          $build = Join-Path $env:RUNNER_TEMP 'core-ui-build'
-          $sdkRoot = Join-Path $env:RUNNER_TEMP 'core-ui-sdk\core-ui-v1.8.0'
-
-          git clone --depth 1 --branch codex/align-v1.8 https://github.com/cdd1037/core-ui.git $source
-          cmake -S $source -B $build -A x64 `
-            -DUI_CORE_MSVC_STATIC_CRT=ON `
-            -DUI_CORE_BUILD_STATIC_ARCHIVE=OFF `
-            -DUI_CORE_BUILD_INTERNAL_TESTS=OFF
-          if ($LASTEXITCODE -ne 0) { throw 'Core UI configure failed.' }
-
-          cmake --build $build --config Release --target core-ui --parallel
-          if ($LASTEXITCODE -ne 0) { throw 'Core UI build failed.' }
-
-          $includeDir = Join-Path $sdkRoot 'include'
-          $libDir = Join-Path $sdkRoot 'lib\dynamic'
-          New-Item -ItemType Directory -Force -Path $includeDir, $libDir | Out-Null
-          Copy-Item -LiteralPath (Join-Path $source 'include\ui_core.h') -Destination $includeDir
-          Copy-Item -LiteralPath (Join-Path $build 'Release\core-ui.dll') -Destination $libDir
-          Copy-Item -LiteralPath (Join-Path $build 'Release\core-ui.lib') -Destination $libDir
+          $archive = Join-Path $env:RUNNER_TEMP 'core-ui-v1.8.0-cdd.1-windows-x64.zip'
+          $sdkParent = Join-Path $env:RUNNER_TEMP 'core-ui-sdk'
+          Invoke-WebRequest `
+            -Uri 'https://github.com/cdd1037/core-ui/releases/download/v1.8.0-cdd.1/core-ui-v1.8.0-cdd.1-windows-x64.zip' `
+            -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $sdkParent
+          $sdkRoot = Join-Path $sdkParent 'core-ui-v1.8.0'
+          foreach ($required in @(
+            (Join-Path $sdkRoot 'include\ui_core.h'),
+            (Join-Path $sdkRoot 'lib\dynamic\core-ui.lib'),
+            (Join-Path $sdkRoot 'lib\dynamic\core-ui.dll')
+          )) {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+              throw "Core UI SDK incomplete: $required"
+            }
+          }
           "CORE_UI_ROOT=$sdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Test
