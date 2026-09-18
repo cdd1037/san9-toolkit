@@ -22,9 +22,19 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $archive = Join-Path $env:RUNNER_TEMP 'core-ui-v1.8.0-cdd.1-windows-x64.zip'
           $sdkParent = Join-Path $env:RUNNER_TEMP 'core-ui-sdk'
+          $releaseBase = 'https://github.com/cdd1037/core-ui/releases/download/v1.8.0-cdd.1'
           Invoke-WebRequest `
-            -Uri 'https://github.com/cdd1037/core-ui/releases/download/v1.8.0-cdd.1/core-ui-v1.8.0-cdd.1-windows-x64.zip' `
+            -Uri "$releaseBase/core-ui-v1.8.0-cdd.1-windows-x64.zip" `
             -OutFile $archive
+          $checksumPath = "$archive.sha256"
+          Invoke-WebRequest `
+            -Uri "$releaseBase/core-ui-v1.8.0-cdd.1-windows-x64.zip.sha256" `
+            -OutFile $checksumPath
+          $expected = ((Get-Content -LiteralPath $checksumPath -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expected -ne $actual) {
+            throw "Core UI SDK SHA-256 mismatch: expected $expected, got $actual"
+          }
           Expand-Archive -LiteralPath $archive -DestinationPath $sdkParent
           $sdkRoot = Join-Path $sdkParent 'core-ui-v1.8.0'
           foreach ($required in @(
