@@ -105,7 +105,7 @@ jobs:
           $archive = "dist/San9Toolkit-v$version-windows.zip"
           $checksum = "$archive.sha256"
 
-          if (startsWith($env:GITHUB_REF, 'refs/tags/v')) {
+          if ($env:GITHUB_REF.StartsWith('refs/tags/v')) {
             if ($env:GITHUB_REF_NAME -ne $expectedTag) {
               throw "标签 $env:GITHUB_REF_NAME 与 VERSION $version 不一致。"
             }
