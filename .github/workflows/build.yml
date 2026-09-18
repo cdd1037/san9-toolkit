@@ -16,19 +16,37 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build Core UI SDK
+      - name: Download Core UI 1.8 static CRT SDK
         shell: pwsh
         run: |
-          $source = Join-Path $PWD 'third_party\core-ui-v1.8.0'
-          $sdk = Join-Path $PWD 'third_party\core-ui-sdk-v1.8.0'
-          $build = Join-Path $env:RUNNER_TEMP 'core-ui-build'
-          git clone --depth 1 --branch codex/align-v1.8 `
-            https://github.com/cdd1037/core-ui.git $source
-          cmake -S $source -B $build -G 'Visual Studio 17 2022' -A x64 `
-            -DUI_CORE_BUILD_STATIC_ARCHIVE=ON
-          cmake --build $build --config Release --target release-package --parallel
-          Move-Item -LiteralPath (Join-Path $source 'release\core-ui-v1.8.0') -Destination $sdk
-          "CORE_UI_ROOT=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'core-ui-v1.8.0-cdd.1-windows-x64.zip'
+          $sdkParent = Join-Path $env:RUNNER_TEMP 'core-ui-sdk'
+          $releaseBase = 'https://github.com/cdd1037/core-ui/releases/download/v1.8.0-cdd.1'
+          Invoke-WebRequest `
+            -Uri "$releaseBase/core-ui-v1.8.0-cdd.1-windows-x64.zip" `
+            -OutFile $archive
+          $checksumPath = "$archive.sha256"
+          Invoke-WebRequest `
+            -Uri "$releaseBase/core-ui-v1.8.0-cdd.1-windows-x64.zip.sha256" `
+            -OutFile $checksumPath
+          $expected = ((Get-Content -LiteralPath $checksumPath -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expected -ne $actual) {
+            throw "Core UI SDK SHA-256 mismatch: expected $expected, got $actual"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $sdkParent
+          $sdkRoot = Join-Path $sdkParent 'core-ui-v1.8.0'
+          foreach ($required in @(
+            (Join-Path $sdkRoot 'include\ui_core.h'),
+            (Join-Path $sdkRoot 'lib\dynamic\core-ui.lib'),
+            (Join-Path $sdkRoot 'lib\dynamic\core-ui.dll')
+          )) {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+              throw "Core UI SDK incomplete: $required"
+            }
+          }
+          "CORE_UI_ROOT=$sdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Test
         shell: pwsh
@@ -38,30 +56,72 @@ jobs:
         shell: pwsh
         run: ./package.ps1 -CoreUiRoot $env:CORE_UI_ROOT
 
+      - name: Verify packaged binaries do not import MSVC runtime DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'Visual Studio installation not found.' }
+          $dumpbin = Get-ChildItem -LiteralPath (Join-Path $vs 'VC\Tools\MSVC') -Filter dumpbin.exe -Recurse |
+            Where-Object { $_.FullName -match '\\Hostx64\\x64\\dumpbin\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) { throw 'dumpbin.exe not found.' }
+
+          $binaries = @(
+            'dist\Release\San9Toolkit.exe',
+            'dist\Release\bin\x64\core-ui.dll',
+            'dist\Release\bin\x86\San9Toolkit.Bootstrap.exe',
+            'dist\Release\bin\x86\San9Toolkit.Runtime.dll'
+          )
+          $forbidden = 'MSVCP140(?:_[0-9]+)?\.dll|VCRUNTIME140(?:_[0-9]+)?\.dll|CONCRT140\.dll'
+          foreach ($binary in $binaries) {
+            $deps = (& $dumpbin /dependents $binary 2>&1) -join "`n"
+            Write-Host "=== $binary ==="
+            Write-Host $deps
+            if ($deps -match $forbidden) {
+              throw "$binary still imports a dynamic MSVC runtime DLL."
+            }
+          }
+
       - name: Upload player package
         uses: actions/upload-artifact@v7
         with:
-          name: San9Toolkit-windows
+          name: San9Toolkit-windows-static-crt
           path: |
             dist/San9Toolkit-v*-windows.zip
             dist/San9Toolkit-v*-windows.zip.sha256
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:'))
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
           $expectedTag = "v$version"
-          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
-            throw "标签 $env:GITHUB_REF_NAME 与 VERSION $version 不一致。"
+          $archive = "dist/San9Toolkit-v$version-windows.zip"
+          $checksum = "$archive.sha256"
+
+          if ($env:GITHUB_REF.StartsWith('refs/tags/v')) {
+            if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+              throw "标签 $env:GITHUB_REF_NAME 与 VERSION $version 不一致。"
+            }
+            gh release create $expectedTag `
+              "$archive#San9 Toolkit $expectedTag Windows 玩家版" `
+              "$checksum#SHA-256 校验文件" `
+              --title "San9 Toolkit $expectedTag" `
+              --generate-notes `
+              --verify-tag `
+              --latest
+          } else {
+            gh release create $expectedTag `
+              "$archive#San9 Toolkit $expectedTag Windows 玩家版" `
+              "$checksum#SHA-256 校验文件" `
+              --target $env:GITHUB_SHA `
+              --title "San9 Toolkit $expectedTag" `
+              --generate-notes `
+              --latest
           }
-          gh release create $env:GITHUB_REF_NAME `
-            "dist/San9Toolkit-v$version-windows.zip#San9 Toolkit $expectedTag Windows 玩家版" `
-            "dist/San9Toolkit-v$version-windows.zip.sha256#SHA-256 校验文件" `
-            --title "San9 Toolkit $expectedTag" `
-            --generate-notes `
-            --verify-tag `
-            --latest

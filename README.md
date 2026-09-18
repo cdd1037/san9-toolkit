@@ -99,7 +99,8 @@ L 头像及调色板变体 0，不是已完成的通用头像功能；配套实�
 GUI 依赖上游 [ghboke/core-ui](https://github.com/ghboke/core-ui) 的
 [`v1.8.0`](https://github.com/ghboke/core-ui/releases/tag/v1.8.0)，并在该版本上保留本项目所需的
 两处修复（ScrollView padding 视口和 `.uix` 原生导航控件）。本地参考源码放在
-`third_party/core-ui-v1.8.0/`，由该源码生成的 Windows x64 SDK 放在
+`third_party/core-ui-v1.8.0/`，使用静态 MSVC 运行库的 Windows x64 SDK 从
+[`v1.8.0-cdd.1`](https://github.com/cdd1037/core-ui/releases/tag/v1.8.0-cdd.1) 下载并校验 SHA-256 后放在
 `third_party/core-ui-sdk-v1.8.0/`；两者不进入本仓库版本历史。默认构建直接使用后者，也可通过
 参数明确指定其他 SDK 路径。构建需要安装带 C++ 桌面工具链的 Visual Studio 和 Windows 10 SDK。
 
@@ -120,12 +121,20 @@ GUI 依赖上游 [ghboke/core-ui](https://github.com/ghboke/core-ui) 的
 ./package.ps1 -CoreUiRoot C:\SDK\core-ui-sdk-v1.8.0
 ```
 
-图形程序使用 x64，Bootstrap 和 Runtime 使用 Win32；Runtime 静态链接 MSVC 运行库，
-不要求玩家另行安装 x86 Visual C++ Redistributable。发布根目录只有用户入口
-`San9Toolkit.exe`；`core-ui.dll` 位于 `bin\x64`，无窗口 Bootstrap 和 Runtime 位于
+图形程序使用 x64，Bootstrap 和 Runtime 使用 Win32。正式 Windows 玩家包中的
+`San9Toolkit.exe`、`core-ui.dll`、Bootstrap 和 Runtime 均静态链接 MSVC C/C++ 运行库（`/MT`），
+不依赖 `MSVCP140.dll`、`VCRUNTIME140*.dll` 或 `CONCRT140.dll`，因此玩家无需另行安装
+x86/x64 Visual C++ Redistributable。发布根目录只有用户入口 `San9Toolkit.exe`；
+`core-ui.dll` 仍作为项目自带动态库放在 `bin\x64`，无窗口 Bootstrap 和 Runtime 位于
 `bin\x86`。界面结构和样式由发布目录中的 `ui\app.uix` 定义，程序启动时直接读取该文件；
 修改 UIX 后无需重新编译。缺少或无法解析 UIX 时程序会明确启动失败，不使用内嵌回退。
 Runtime DLL 同样不内嵌、不释放也不缓存。
+
+官方 CI 固定下载 `cdd1037/core-ui` 的 `v1.8.0-cdd.1` Windows x64 SDK；该 SDK 已以
+静态 CRT（`/MT`）构建，因此无需在每次 Toolkit 构建时重新编译 Core UI。随后 CI 会运行
+Toolkit 测试、打包，并使用 `dumpbin /dependents` 检查四个发布二进制，若仍导入上述
+VC Runtime DLL 则构建失败。
+本地通过预编译 Core UI SDK 构建时，`core-ui.dll` 的 CRT 模式取决于该 SDK 本身。
 
 CI 会先运行不依赖游戏资源的状态、缓冲和时序逻辑测试，再单独构建和打包。若需对本机原作
 影片做只读的 Media Foundation 全量解码验证，可构建 `San9Toolkit.MovieProbe.vcxproj`，
