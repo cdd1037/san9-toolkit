@@ -1,20 +1,20 @@
 #include "d3d11_presenter.h"
 
+#include "presentation_schedule.h"
 #include "viewport.h"
 
 #include <d3d11.h>
 #include <d3dcompiler.h>
-#include <dxgi.h>
+#include <dxgi1_3.h>
 #include <wrl/client.h>
 
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 namespace san9::d3d11_presenter {
-
-bool PresentNow(HDC framebufferDc);
 
 namespace {
 
@@ -25,11 +25,11 @@ constexpr int kLogicalHeight = 768;
 constexpr DXGI_FORMAT kFrameTextureFormat = DXGI_FORMAT_B5G5R5A1_UNORM;
 constexpr char kShaderSource[] = R"(
 Texture2D frameTexture : register(t0);
+SamplerState frameSampler : register(s0);
 
 cbuffer FrameParameters : register(b0) {
-    float2 textureSize;
     float flipVertical;
-    float padding;
+    float3 padding;
 };
 
 struct VertexOutput {
@@ -49,46 +49,24 @@ VertexOutput VertexMain(uint vertexId : SV_VertexID) {
 float4 PixelMain(VertexOutput input) : SV_Target {
     const float2 sampleUv = float2(input.uv.x,
         lerp(input.uv.y, 1.0 - input.uv.y, flipVertical));
-    const float2 sourcePosition =
-        sampleUv * textureSize - 0.5;
-    const int2 basePosition = int2(floor(sourcePosition));
-    const float2 fraction = frac(sourcePosition);
-    const float2 fraction2 = fraction * fraction;
-    const float2 fraction3 = fraction2 * fraction;
-    const float4 weightsX = float4(
-        -0.5 * fraction3.x + fraction2.x - 0.5 * fraction.x,
-         1.5 * fraction3.x - 2.5 * fraction2.x + 1.0,
-        -1.5 * fraction3.x + 2.0 * fraction2.x + 0.5 * fraction.x,
-         0.5 * fraction3.x - 0.5 * fraction2.x);
-    const float4 weightsY = float4(
-        -0.5 * fraction3.y + fraction2.y - 0.5 * fraction.y,
-         1.5 * fraction3.y - 2.5 * fraction2.y + 1.0,
-        -1.5 * fraction3.y + 2.0 * fraction2.y + 0.5 * fraction.y,
-         0.5 * fraction3.y - 0.5 * fraction2.y);
-
-    float3 color = 0.0;
-    [unroll]
-    for (int y = 0; y < 4; ++y) {
-        [unroll]
-        for (int x = 0; x < 4; ++x) {
-            const int2 samplePosition = clamp(
-                basePosition + int2(x - 1, y - 1), int2(0, 0), int2(textureSize) - 1);
-            color += frameTexture.Load(int3(samplePosition, 0)).rgb *
-                     weightsX[x] * weightsY[y];
-        }
-    }
-    return float4(saturate(color), 1.0);
+    return float4(frameTexture.SampleLevel(frameSampler, sampleUv, 0).rgb, 1.0);
 }
 )";
 
 HWND g_window = nullptr;
 HDC g_pendingFramebufferDc = nullptr;
-volatile LONG g_presentPending = 0;
-UINT g_backBufferWidth = 0;
-UINT g_backBufferHeight = 0;
+bool g_frameDirty = false;
+bool g_frameAvailable = false;
+bool g_movieDirty = false;
+PresentationSchedule g_schedule;
+UINT_PTR g_timer = 0;
+HANDLE g_frameLatency = nullptr;
+bool g_frameReady = false;
+std::vector<std::uint8_t> g_moviePixels;
 ComPtr<ID3D11Device> g_device;
 ComPtr<ID3D11DeviceContext> g_context;
-ComPtr<IDXGISwapChain> g_swapChain;
+ComPtr<IDXGISwapChain2> g_swapChain;
+ComPtr<ID3D11SamplerState> g_sampler;
 ComPtr<ID3D11RenderTargetView> g_renderTarget;
 ComPtr<ID3D11Texture2D> g_frameTexture;
 ComPtr<ID3D11ShaderResourceView> g_frameView;
@@ -102,12 +80,11 @@ UINT g_movieHeight = 0;
 bool g_movieActive = false;
 bool g_movieFrameAvailable = false;
 std::recursive_mutex g_presenterMutex;
+Statistics g_statistics;
 
 struct FrameParameters {
-    float width;
-    float height;
     float flipVertical;
-    float padding;
+    float padding[3];
 };
 
 bool CompileShader(const char* entryPoint, const char* profile, ComPtr<ID3DBlob>& bytecode) {
@@ -125,46 +102,10 @@ bool CompileShader(const char* entryPoint, const char* profile, ComPtr<ID3DBlob>
     return true;
 }
 
-bool CreateRenderTarget(UINT width, UINT height) {
-    if (g_backBufferWidth != 0 || g_backBufferHeight != 0) {
-        // ResizeBuffers requires every direct and indirect back-buffer reference
-        // to be released, including bindings retained by the immediate context.
-        g_context->ClearState();
-        g_renderTarget.Reset();
-        g_context->Flush();
-        const HRESULT resized = g_swapChain->ResizeBuffers(0, width, height,
-                                                           DXGI_FORMAT_UNKNOWN, 0);
-        if (FAILED(resized)) {
-            return false;
-        }
-    } else {
-        g_renderTarget.Reset();
-    }
-
+bool CreateRenderTarget() {
     ComPtr<ID3D11Texture2D> backBuffer;
-    if (FAILED(g_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))) ||
-        FAILED(g_device->CreateRenderTargetView(backBuffer.Get(), nullptr, &g_renderTarget))) {
-        return false;
-    }
-    g_backBufferWidth = width;
-    g_backBufferHeight = height;
-    return true;
-}
-
-bool EnsureRenderTarget() {
-    RECT client{};
-    if (!g_window || !GetClientRect(g_window, &client)) {
-        return false;
-    }
-    const UINT width = static_cast<UINT>(client.right - client.left);
-    const UINT height = static_cast<UINT>(client.bottom - client.top);
-    if (width == 0 || height == 0) {
-        return false;
-    }
-    if (g_renderTarget && width == g_backBufferWidth && height == g_backBufferHeight) {
-        return true;
-    }
-    return CreateRenderTarget(width, height);
+    return SUCCEEDED(g_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer))) &&
+           SUCCEEDED(g_device->CreateRenderTargetView(backBuffer.Get(), nullptr, &g_renderTarget));
 }
 
 bool ReadFramebuffer(HDC framebufferDc, BITMAP& bitmap) {
@@ -176,7 +117,6 @@ bool ReadFramebuffer(HDC framebufferDc, BITMAP& bitmap) {
 }
 
 bool UploadFrame(const BITMAP& bitmap) {
-
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(g_context->Map(g_frameTexture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
         return false;
@@ -192,9 +132,9 @@ bool UploadFrame(const BITMAP& bitmap) {
     return true;
 }
 
-viewport::Bounds FitSourceToViewport(UINT width, UINT height) {
-    viewport::Bounds bounds = viewport::Calculate(g_window);
-    if (bounds.width <= 0 || bounds.height <= 0 || width == 0 || height == 0) {
+viewport::Bounds FitSourceToCanvas(UINT width, UINT height) {
+    viewport::Bounds bounds{0, 0, kLogicalWidth, kLogicalHeight};
+    if (width == 0 || height == 0) {
         return {};
     }
     const long long widthLimitedHeight =
@@ -212,18 +152,29 @@ viewport::Bounds FitSourceToViewport(UINT width, UINT height) {
     return bounds;
 }
 
-void DrawScaledFrame(ID3D11ShaderResourceView* view, UINT width, UINT height,
-                     bool flipVertical) {
+void DrawFrame(ID3D11ShaderResourceView* view, UINT width, UINT height,
+               bool flipVertical) {
     constexpr float clearColor[4]{0.0F, 0.0F, 0.0F, 1.0F};
     g_context->OMSetRenderTargets(1, g_renderTarget.GetAddressOf(), nullptr);
     g_context->ClearRenderTargetView(g_renderTarget.Get(), clearColor);
 
-    const viewport::Bounds bounds = FitSourceToViewport(width, height);
+    const viewport::Bounds bounds = FitSourceToCanvas(width, height);
     D3D11_VIEWPORT graphicsViewport{};
-    graphicsViewport.TopLeftX = static_cast<float>(bounds.x);
-    graphicsViewport.TopLeftY = static_cast<float>(bounds.y);
-    graphicsViewport.Width = static_cast<float>(bounds.width);
-    graphicsViewport.Height = static_cast<float>(bounds.height);
+    // Express physical letterboxing in the fixed-size buffer. DXGI stretches
+    // the buffer to the client; the resulting viewport matches mouse mapping.
+    RECT client{};
+    GetClientRect(g_window, &client);
+    const auto viewport = viewport::Calculate(g_window);
+    const float scaleX = static_cast<float>(kLogicalWidth) / client.right;
+    const float scaleY = static_cast<float>(kLogicalHeight) / client.bottom;
+    graphicsViewport.TopLeftX = (viewport.x + bounds.x * viewport.width /
+                                static_cast<float>(kLogicalWidth)) * scaleX;
+    graphicsViewport.TopLeftY = (viewport.y + bounds.y * viewport.height /
+                                static_cast<float>(kLogicalHeight)) * scaleY;
+    graphicsViewport.Width = bounds.width * viewport.width /
+                             static_cast<float>(kLogicalWidth) * scaleX;
+    graphicsViewport.Height = bounds.height * viewport.height /
+                              static_cast<float>(kLogicalHeight) * scaleY;
     graphicsViewport.MinDepth = 0.0F;
     graphicsViewport.MaxDepth = 1.0F;
     g_context->RSSetViewports(1, &graphicsViewport);
@@ -231,12 +182,12 @@ void DrawScaledFrame(ID3D11ShaderResourceView* view, UINT width, UINT height,
     g_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     g_context->VSSetShader(g_vertexShader.Get(), nullptr, 0);
     g_context->PSSetShader(g_pixelShader.Get(), nullptr, 0);
-    const FrameParameters parameters{static_cast<float>(width), static_cast<float>(height),
-                                     flipVertical ? 1.0F : 0.0F, 0.0F};
+    const FrameParameters parameters{flipVertical ? 1.0F : 0.0F, {}};
     g_context->UpdateSubresource(g_frameParameters.Get(), 0, nullptr, &parameters, 0, 0);
     ID3D11Buffer* constantBuffer = g_frameParameters.Get();
     g_context->PSSetConstantBuffers(0, 1, &constantBuffer);
     g_context->PSSetShaderResources(0, 1, &view);
+    g_context->PSSetSamplers(0, 1, g_sampler.GetAddressOf());
     g_context->Draw(3, 0);
     ID3D11ShaderResourceView* noResource = nullptr;
     g_context->PSSetShaderResources(0, 1, &noResource);
@@ -248,7 +199,7 @@ bool Initialize(HWND window) {
     const std::lock_guard lock(g_presenterMutex);
     if (window && g_window == window && g_device && g_context && g_swapChain &&
         g_renderTarget && g_frameTexture && g_frameView && g_frameParameters &&
-        g_vertexShader && g_pixelShader) {
+        g_vertexShader && g_pixelShader && g_sampler && g_frameLatency) {
         return true;
     }
     Shutdown();
@@ -266,34 +217,57 @@ bool Initialize(HWND window) {
         return false;
     }
 
-    DXGI_SWAP_CHAIN_DESC swapChainDescription{};
-    swapChainDescription.BufferDesc.Width = width;
-    swapChainDescription.BufferDesc.Height = height;
-    swapChainDescription.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    swapChainDescription.SampleDesc.Count = 1;
-    swapChainDescription.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    swapChainDescription.BufferCount = 2;
-    swapChainDescription.OutputWindow = window;
-    swapChainDescription.Windowed = TRUE;
-    swapChainDescription.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-
     constexpr std::array<D3D_FEATURE_LEVEL, 3> featureLevels{
-        D3D_FEATURE_LEVEL_11_0,
-        D3D_FEATURE_LEVEL_10_1,
-        D3D_FEATURE_LEVEL_10_0,
+        D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0,
     };
     D3D_FEATURE_LEVEL createdFeatureLevel{};
-    const HRESULT created = D3D11CreateDeviceAndSwapChain(
-        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-        featureLevels.data(), static_cast<UINT>(featureLevels.size()), D3D11_SDK_VERSION,
-        &swapChainDescription, &g_swapChain, &g_device, &createdFeatureLevel, &g_context);
-    if (FAILED(created)) {
+    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+                                D3D11_CREATE_DEVICE_BGRA_SUPPORT, featureLevels.data(),
+                                static_cast<UINT>(featureLevels.size()), D3D11_SDK_VERSION,
+                                &g_device, &createdFeatureLevel, &g_context))) {
+        Shutdown();
+        return false;
+    }
+    ComPtr<IDXGIDevice> dxgiDevice;
+    ComPtr<IDXGIAdapter> adapter;
+    ComPtr<IDXGIFactory2> factory;
+    ComPtr<IDXGISwapChain1> swapChain;
+    DXGI_SWAP_CHAIN_DESC1 description{};
+    description.Width = kLogicalWidth;
+    description.Height = kLogicalHeight;
+    description.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    description.SampleDesc.Count = 1;
+    description.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    description.BufferCount = 2;
+    description.Scaling = DXGI_SCALING_STRETCH;
+    description.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    description.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    description.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    if (FAILED(g_device.As(&dxgiDevice)) || FAILED(dxgiDevice->GetAdapter(&adapter)) ||
+        FAILED(adapter->GetParent(IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->CreateSwapChainForHwnd(g_device.Get(), window, &description,
+                                               nullptr, nullptr, &swapChain)) ||
+        FAILED(swapChain.As(&g_swapChain)) ||
+        FAILED(factory->MakeWindowAssociation(window, DXGI_MWA_NO_ALT_ENTER)) ||
+        FAILED(g_swapChain->SetMaximumFrameLatency(1))) {
+        Shutdown();
+        return false;
+    }
+    g_frameLatency = g_swapChain->GetFrameLatencyWaitableObject();
+    if (!g_frameLatency) {
         Shutdown();
         return false;
     }
     g_window = window;
-    g_backBufferWidth = 0;
-    g_backBufferHeight = 0;
+
+    D3D11_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.MaxLOD = D3D11_FLOAT32_MAX;
+    if (FAILED(g_device->CreateSamplerState(&sampler, &g_sampler))) {
+        Shutdown();
+        return false;
+    }
 
     UINT frameFormatSupport = 0;
     constexpr UINT requiredFrameFormatSupport =
@@ -343,57 +317,128 @@ bool Initialize(HWND window) {
         return false;
     }
 
-    if (!CreateRenderTarget(width, height)) {
+    if (!CreateRenderTarget()) {
         Shutdown();
         return false;
     }
     return true;
 }
 
-bool PresentNow(HDC framebufferDc) {
-    const std::lock_guard lock(g_presenterMutex);
-    BITMAP bitmap{};
-    if (!g_device || !g_context || !g_swapChain || !EnsureRenderTarget() ||
-        !ReadFramebuffer(framebufferDc, bitmap)) {
-        return false;
-    }
+namespace {
 
-    if (!UploadFrame(bitmap)) {
-        return false;
-    }
-    DrawScaledFrame(g_frameView.Get(), kLogicalWidth, kLogicalHeight, true);
+bool TryPresent();
 
-    const HRESULT presented = g_swapChain->Present(0, 0);
-    if (presented == DXGI_ERROR_DEVICE_REMOVED || presented == DXGI_ERROR_DEVICE_RESET) {
-        Shutdown();
+void CancelTimer() {
+    if (g_timer) {
+        KillTimer(g_window, g_timer);
+        g_timer = 0;
     }
-    return SUCCEEDED(presented);
 }
+
+void CALLBACK OnPresentTimer(HWND window, UINT, UINT_PTR timer, DWORD) {
+    const std::lock_guard lock(g_presenterMutex);
+    if (window != g_window || timer != g_timer) return;
+    CancelTimer();
+    if (!TryPresent()) {
+        OutputDebugStringW(L"San9Toolkit: deferred frame presentation failed.\n");
+    }
+}
+
+bool ArmTimer() {
+    if (g_timer) return true;
+    // A window timer executes on the game's window thread, where the DIB is
+    // owned. Do not read the live GDI buffer from a rendering worker.
+    g_timer = SetTimer(g_window, reinterpret_cast<UINT_PTR>(&g_schedule),
+                      g_schedule.DelayMilliseconds(PresentationSchedule::Clock::now()),
+                      &OnPresentTimer);
+    return g_timer != 0;
+}
+
+bool TryPresent() {
+    if (!g_schedule.Pending()) return true;
+    if (!g_swapChain) return false;
+    RECT client{};
+    if (!IsWindowVisible(g_window) || IsIconic(g_window) ||
+        !GetClientRect(g_window, &client) || client.right <= 0 || client.bottom <= 0) {
+        // Restore/paint will resume the retained request. No hidden-window poll.
+        CancelTimer();
+        return true;
+    }
+    const auto now = PresentationSchedule::Clock::now();
+    if (!g_schedule.Due(now)) return ArmTimer();
+    if (!g_frameReady) {
+        const DWORD ready = WaitForSingleObject(g_frameLatency, 0);
+        if (ready == WAIT_FAILED) return false;
+        g_frameReady = ready == WAIT_OBJECT_0;
+    }
+    if (!g_frameReady) {
+        g_schedule.Retry(now);
+        return ArmTimer();
+    }
+    if (g_movieActive) {
+        if (!g_movieFrameAvailable) return true;
+        if (g_movieDirty) {
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (FAILED(g_context->Map(g_movieTexture.Get(), 0, D3D11_MAP_WRITE_DISCARD,
+                                      0, &mapped))) return false;
+            const std::size_t rowBytes = g_movieWidth * sizeof(std::uint32_t);
+            for (UINT y = 0; y < g_movieHeight; ++y) {
+                std::memcpy(static_cast<std::uint8_t*>(mapped.pData) + y * mapped.RowPitch,
+                            g_moviePixels.data() + y * rowBytes, rowBytes);
+            }
+            g_context->Unmap(g_movieTexture.Get(), 0);
+            ++g_statistics.movieUploads;
+            g_movieDirty = false;
+        }
+        DrawFrame(g_movieView.Get(), g_movieWidth, g_movieHeight, false);
+    } else {
+        if (g_frameDirty) {
+            BITMAP bitmap{};
+            // Complete the window thread's GDI writes before reading DIB memory.
+            GdiFlush();
+            if (!ReadFramebuffer(g_pendingFramebufferDc, bitmap) || !UploadFrame(bitmap)) {
+                return false;
+            }
+            g_frameDirty = false;
+            g_frameAvailable = true;
+            ++g_statistics.gameUploads;
+        }
+        if (!g_frameAvailable) return true;
+        DrawFrame(g_frameView.Get(), kLogicalWidth, kLogicalHeight, true);
+    }
+    const HRESULT result = g_swapChain->Present(1, DXGI_PRESENT_DO_NOT_WAIT);
+    if (result == DXGI_ERROR_WAS_STILL_DRAWING) {
+        g_schedule.Retry(now);
+        return ArmTimer();
+    }
+    if (FAILED(result)) return false;
+    ++g_statistics.presentedFrames;
+    g_frameReady = false;
+    g_schedule.Complete(PresentationSchedule::Clock::now());
+    CancelTimer();
+    return true;
+}
+
+} // namespace
 
 bool QueueFrame(HDC framebufferDc) {
     const std::lock_guard lock(g_presenterMutex);
-    if (!framebufferDc || !g_device || !g_window) {
-        return false;
-    }
+    if (!framebufferDc || !g_device || !g_window) return false;
     g_pendingFramebufferDc = framebufferDc;
-    InterlockedExchange(&g_presentPending, 1);
+    g_frameDirty = true;
+    if (!g_movieActive) g_schedule.Request();
     return true;
 }
 
 bool PresentFrame(HDC framebufferDc) {
     const std::lock_guard lock(g_presenterMutex);
-    return PresentNow(framebufferDc);
+    if (!g_frameAvailable && !QueueFrame(framebufferDc)) return false;
+    return PresentCurrentFrame();
 }
 
 bool PresentPendingFrame() {
     const std::lock_guard lock(g_presenterMutex);
-    if (InterlockedExchange(&g_presentPending, 0) == 0) {
-        return true;
-    }
-    if (g_movieActive) {
-        return true;
-    }
-    return PresentNow(g_pendingFramebufferDc);
+    return TryPresent();
 }
 
 bool BeginMovie(HWND window, UINT width, UINT height) {
@@ -428,6 +473,9 @@ bool BeginMovie(HWND window, UINT width, UINT height) {
     g_movieWidth = width;
     g_movieHeight = height;
     g_movieFrameAvailable = false;
+    g_movieDirty = false;
+    CancelTimer();
+    g_schedule = {};
     g_movieActive = true;
     return true;
 }
@@ -435,48 +483,42 @@ bool BeginMovie(HWND window, UINT width, UINT height) {
 bool PresentMovieFrame(const void* pixels, UINT rowPitch) {
     const std::lock_guard lock(g_presenterMutex);
     if (!g_movieActive || !g_movieTexture || !pixels ||
-        rowPitch < g_movieWidth * sizeof(std::uint32_t) || !EnsureRenderTarget()) {
+        rowPitch < g_movieWidth * sizeof(std::uint32_t)) {
         return false;
     }
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(g_context->Map(g_movieTexture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-        return false;
-    }
+    const std::size_t rowBytes = g_movieWidth * sizeof(std::uint32_t);
+    g_moviePixels.resize(rowBytes * g_movieHeight);
     const auto* source = static_cast<const std::uint8_t*>(pixels);
     for (UINT y = 0; y < g_movieHeight; ++y) {
-        std::memcpy(static_cast<std::uint8_t*>(mapped.pData) + y * mapped.RowPitch,
-                    source + y * rowPitch,
-                    static_cast<std::size_t>(g_movieWidth) * sizeof(std::uint32_t));
+        std::memcpy(g_moviePixels.data() + y * rowBytes, source + y * rowPitch, rowBytes);
     }
-    g_context->Unmap(g_movieTexture.Get(), 0);
     g_movieFrameAvailable = true;
-    DrawScaledFrame(g_movieView.Get(), g_movieWidth, g_movieHeight, false);
-    const HRESULT presented = g_swapChain->Present(0, 0);
-    return SUCCEEDED(presented);
+    g_movieDirty = true;
+    g_schedule.Request();
+    return TryPresent();
 }
 
 bool PresentCurrentFrame() {
     const std::lock_guard lock(g_presenterMutex);
-    if (g_movieActive) {
-        if (!g_movieFrameAvailable || !EnsureRenderTarget()) {
-            return true;
-        }
-        DrawScaledFrame(g_movieView.Get(), g_movieWidth, g_movieHeight, false);
-        return SUCCEEDED(g_swapChain->Present(0, 0));
-    }
-    return !g_pendingFramebufferDc || PresentNow(g_pendingFramebufferDc);
+    if ((g_movieActive && !g_movieFrameAvailable) ||
+        (!g_movieActive && !g_frameAvailable && !g_frameDirty)) return true;
+    g_schedule.Request();
+    return TryPresent();
 }
 
 void EndMovie() {
     const std::lock_guard lock(g_presenterMutex);
     g_movieActive = false;
     g_movieFrameAvailable = false;
+    g_movieDirty = false;
     g_movieWidth = 0;
     g_movieHeight = 0;
     g_movieView.Reset();
     g_movieTexture.Reset();
+    g_moviePixels.clear();
     if (g_pendingFramebufferDc) {
-        PresentNow(g_pendingFramebufferDc);
+        QueueFrame(g_pendingFramebufferDc);
+        TryPresent();
     }
 }
 
@@ -485,9 +527,21 @@ bool IsMovieActive() {
     return g_movieActive;
 }
 
+Statistics GetStatistics() {
+    const std::lock_guard lock(g_presenterMutex);
+    return g_statistics;
+}
+
 void Shutdown() {
     const std::lock_guard lock(g_presenterMutex);
-    InterlockedExchange(&g_presentPending, 0);
+    CancelTimer();
+    g_schedule = {};
+    g_statistics = {};
+    g_frameDirty = false;
+    g_frameAvailable = false;
+    g_frameReady = false;
+    g_movieDirty = false;
+    g_moviePixels.clear();
     g_pendingFramebufferDc = nullptr;
     if (g_context) {
         g_context->ClearState();
@@ -502,10 +556,13 @@ void Shutdown() {
     g_frameTexture.Reset();
     g_renderTarget.Reset();
     g_swapChain.Reset();
+    if (g_frameLatency) {
+        CloseHandle(g_frameLatency);
+        g_frameLatency = nullptr;
+    }
+    g_sampler.Reset();
     g_context.Reset();
     g_device.Reset();
-    g_backBufferWidth = 0;
-    g_backBufferHeight = 0;
     g_movieWidth = 0;
     g_movieHeight = 0;
     g_movieActive = false;

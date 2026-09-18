@@ -1,8 +1,17 @@
 #pragma once
 
 #include <windows.h>
+#include <cstdint>
 
 namespace san9::d3d11_presenter {
+
+struct Statistics {
+    std::uint64_t presentedFrames = 0;
+    std::uint64_t gameUploads = 0;
+    std::uint64_t movieUploads = 0;
+};
+
+Statistics GetStatistics();
 
 bool Initialize(HWND window);
 bool QueueFrame(HDC framebufferDc);

@@ -5,7 +5,7 @@
     <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{72C06153-359E-47B8-A8E7-864DCFF09DF7}</ProjectGuid>
+    <ProjectGuid>{453B40D0-5B99-40D0-9C6F-C9A782AD1806}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
@@ -20,18 +20,17 @@
   <PropertyGroup><IntDir>$(SolutionDir)build\obj\$(ProjectName)\$(Configuration)\</IntDir><OutDir>$(SolutionDir)build\tests\$(Configuration)\</OutDir></PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><LanguageStandard>stdcpp20</LanguageStandard><AdditionalIncludeDirectories>src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
-    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>user32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>d3d11.lib;d3dcompiler.lib;dxgi.lib;gdi32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\movie_trace.cpp" />
-    <ClCompile Include="src\window_placement.cpp" />
-    <ClCompile Include="tests\movie_state_test.cpp" />
+    <ClCompile Include="src\d3d11_presenter.cpp" />
+    <ClCompile Include="src\viewport.cpp" />
+    <ClCompile Include="tests\presenter_test.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\movie_state.h" />
+    <ClInclude Include="src\d3d11_presenter.h" />
     <ClInclude Include="src\presentation_schedule.h" />
-    <ClInclude Include="src\movie_trace.h" />
-    <ClInclude Include="src\window_placement.h" />
+    <ClInclude Include="src\viewport.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

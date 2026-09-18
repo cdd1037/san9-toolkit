@@ -694,7 +694,7 @@ HRESULT RunPlayback(HWND owner, const wchar_t* path) {
     bool started = false;
     bool audioRunning = false;
     LONGLONG lastClock = -1;
-    LONGLONG lastPresentedTimestamp = -1;
+    LONGLONG lastQueuedTimestamp = -1;
     std::uint64_t droppedVideoFrames = 0;
     auto nextSnapshot = std::chrono::steady_clock::now();
     watchdog.SetActivity(L"playback_loop");
@@ -825,13 +825,13 @@ HRESULT RunPlayback(HWND owner, const wchar_t* path) {
                 swprintf_s(
                     details,
                     L"started=%d paused=%d audio_running=%d video_eos=%d audio_eos=%d "
-                    L"clock=%lld last_presented=%lld next_video=%lld present_queue=%zu "
+                    L"clock=%lld last_queued=%lld next_video=%lld present_queue=%zu "
                     L"decoder_video_queue=%zu decoder_audio_queue=%zu decoder_audio_duration=%lld "
                     L"decoded_video=%llu decoded_audio=%llu last_decoded_video=%lld "
                     L"last_decoded_audio=%lld audio_buffers=%u samples_played=%llu dropped_video=%llu",
                     started ? 1 : 0, g_state.IsPaused() ? 1 : 0,
                     audioRunning ? 1 : 0, videoEnded ? 1 : 0, audioEnded ? 1 : 0,
-                    lastClock, lastPresentedTimestamp, nextVideoTimestamp, frames.size(),
+                    lastClock, lastQueuedTimestamp, nextVideoTimestamp, frames.size(),
                     decoderVideoQueue, decoderAudioQueue, decoderAudioDuration,
                     static_cast<unsigned long long>(decodedVideoFrames),
                     static_cast<unsigned long long>(decodedAudioPackets),
@@ -863,7 +863,7 @@ HRESULT RunPlayback(HWND owner, const wchar_t* path) {
                     break;
                 }
                 watchdog.SetActivity(L"playback_loop");
-                lastPresentedTimestamp = frame.timestamp;
+                lastQueuedTimestamp = frame.timestamp;
                 frames.pop_front();
             }
             if (movie_state::PlaybackComplete(videoEnded, audioEnded, frames.size(),
@@ -1028,9 +1028,7 @@ bool HandleWindowMessage(HWND window, UINT message, WPARAM wParam, LPARAM) {
                                                    : L"source=minimize paused=0");
         ApplyPauseState(g_activeVoice);
     }
-    if (message == WM_PAINT || message == WM_SIZE) {
-        d3d11_presenter::PresentCurrentFrame();
-    }
+    // The runtime window procedure owns repaint requests for both game and movie.
     return false;
 }
 

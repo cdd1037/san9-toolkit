@@ -1,4 +1,5 @@
 #include "movie_state.h"
+#include "presentation_schedule.h"
 #include "movie_trace.h"
 #include "toolkit_config.h"
 #include "window_placement.h"
@@ -190,6 +191,33 @@ void VerifyMovieTrace() {
 } // namespace
 
 int main() {
+    {
+        using Schedule = san9::PresentationSchedule;
+        using namespace std::chrono_literals;
+        Schedule schedule;
+        const Schedule::Clock::time_point start{};
+        assert(!schedule.Due(start));
+        unsigned int frames = 0;
+        for (int millisecond = 0; millisecond < 1000; ++millisecond) {
+            const auto now = start + std::chrono::milliseconds(millisecond);
+            schedule.Request();
+            if (schedule.Due(now)) {
+                schedule.Complete(now);
+                ++frames;
+            }
+        }
+        assert(frames > 0 && frames <= 60);
+        assert(schedule.Pending());
+        assert(schedule.Due(start + 1020ms));
+        schedule.Retry(start + 1020ms);
+        assert(schedule.Pending());
+        assert(!schedule.Due(start + 1030ms));
+        schedule.Request();
+        assert(schedule.Due(start + 1037ms));
+        schedule.Complete(start + 1037ms);
+        assert(!schedule.Pending());
+        assert(!schedule.Due(start + 1h));
+    }
     san9::movie_state::PlaybackState state;
     assert(state.IsFinished());
     assert(!state.IsPlaying());

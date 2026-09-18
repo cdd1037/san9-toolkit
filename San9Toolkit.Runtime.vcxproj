@@ -39,6 +39,7 @@
     <ClInclude Include="src\code_hook.h" />
     <ClInclude Include="src\cursor_lock.h" />
     <ClInclude Include="src\d3d11_presenter.h" />
+    <ClInclude Include="src\presentation_schedule.h" />
     <ClInclude Include="src\documents_overlay.h" />
     <ClInclude Include="src\documents_path.h" />
     <ClInclude Include="src\import_hook.h" />
