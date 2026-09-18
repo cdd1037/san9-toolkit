@@ -121,9 +121,10 @@ x86/x64 Visual C++ Redistributable。发布根目录只有用户入口 `San9Tool
 修改 UIX 后无需重新编译。缺少或无法解析 UIX 时程序会明确启动失败，不使用内嵌回退。
 Runtime DLL 同样不内嵌、不释放也不缓存。
 
-官方 CI 会从 `cdd1037/core-ui` 的 `codex/align-v1.8` 分支构建 Core UI 1.8，并通过
-`UI_CORE_MSVC_STATIC_CRT=ON` 固定为静态 CRT；随后运行 Toolkit 测试、打包，并使用
-`dumpbin /dependents` 检查四个发布二进制，若仍导入上述 VC Runtime DLL 则构建失败。
+官方 CI 固定下载 `cdd1037/core-ui` 的 `v1.8.0-cdd.1` Windows x64 SDK；该 SDK 已以
+静态 CRT（`/MT`）构建，因此无需在每次 Toolkit 构建时重新编译 Core UI。随后 CI 会运行
+Toolkit 测试、打包，并使用 `dumpbin /dependents` 检查四个发布二进制，若仍导入上述
+VC Runtime DLL 则构建失败。
 本地通过预编译 Core UI SDK 构建时，`core-ui.dll` 的 CRT 模式取决于该 SDK 本身。
 
 CI 会先运行不依赖游戏资源的状态、缓冲和时序逻辑测试，再单独构建和打包。若需对本机原作
